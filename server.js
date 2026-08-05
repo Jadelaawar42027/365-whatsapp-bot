@@ -1,16 +1,12 @@
 import "dotenv/config";
 import express from "express";
-import { sendWhatsAppMessage } from "./whatsapp.js";
+import { sendWhatsAppMessage, sendTypingIndicator } from "./whatsapp.js";
 import { askClaude } from "./claude.js";
+import { transcribeWhatsAppVoiceNote } from "./voiceTranscription.js";
 
 const app = express();
 app.use(express.json());
 
-// ---------------------------------------------------------------------------
-// 1) Webhook verification — Meta calls this ONCE when you register the
-//    webhook URL in the App Dashboard. It sends a GET request with a
-//    challenge; you must echo it back if the verify token matches.
-// ---------------------------------------------------------------------------
 app.get("/webhook", (req, res) => {
   const mode = req.query["hub.mode"];
   const token = req.query["hub.verify_token"];
@@ -25,12 +21,7 @@ app.get("/webhook", (req, res) => {
   return res.sendStatus(403);
 });
 
-// ---------------------------------------------------------------------------
-// 2) Incoming messages — Meta POSTs here every time someone messages your
-//    WhatsApp number.
-// ---------------------------------------------------------------------------
 app.post("/webhook", async (req, res) => {
-  // Always ACK immediately so Meta doesn't retry/timeout on you.
   res.sendStatus(200);
 
   try {
@@ -40,22 +31,48 @@ app.post("/webhook", async (req, res) => {
     const message = value?.messages?.[0];
 
     if (!message) {
-      // Could be a status update (delivered/read) rather than a new message — ignore.
       return;
     }
 
-    if (message.type !== "text") {
-      const from = message.from;
-      await sendWhatsAppMessage(from, "I can only read text messages right now — try typing your question.");
+    const from = message.from;
+
+    sendTypingIndicator(message.id);
+
+    const FALLBACK_DELAY_MS = 8000;
+    let replied = false;
+    const fallbackTimer = setTimeout(() => {
+      if (!replied) {
+        sendWhatsAppMessage(from, "Sure, working on your request now...").catch((err) =>
+          console.error("Failed to send fallback message (non-fatal):", err.message)
+        );
+      }
+    }, FALLBACK_DELAY_MS);
+
+    let text;
+
+    if (message.type === "text") {
+      text = message.text.body;
+      console.log(`Incoming from ${from}: ${text}`);
+    } else if (message.type === "audio") {
+      console.log(`Incoming voice note from ${from}, transcribing...`);
+      try {
+        text = await transcribeWhatsAppVoiceNote(message.audio.id);
+        console.log(`Transcribed from ${from}: ${text}`);
+      } catch (err) {
+        console.error("Voice note transcription failed:", err.message);
+        clearTimeout(fallbackTimer);
+        await sendWhatsAppMessage(from, "Couldn't transcribe that voice note — try again or send it as text.");
+        return;
+      }
+    } else {
+      clearTimeout(fallbackTimer);
+      await sendWhatsAppMessage(from, "I can only read text messages or voice notes right now.");
       return;
     }
-
-    const from = message.from; // sender's phone number
-    const text = message.text.body;
-
-    console.log(`Incoming from ${from}: ${text}`);
 
     const reply = await askClaude(from, text);
+    replied = true;
+    clearTimeout(fallbackTimer);
     await sendWhatsAppMessage(from, reply);
   } catch (err) {
     console.error("Error handling incoming webhook:", err);
