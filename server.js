@@ -2,11 +2,17 @@ import "dotenv/config";
 import express from "express";
 import { sendWhatsAppMessage, sendTypingIndicator } from "./whatsapp.js";
 import { askClaude } from "./claude.js";
-import { transcribeWhatsAppVoiceNote } from "./voiceTranscription.js";
+import { logExchange } from "./conversationLog.js";
+import { getIdentityForPhone } from "./brokerRoster.js";
 
 const app = express();
 app.use(express.json());
 
+// ---------------------------------------------------------------------------
+// 1) Webhook verification — Meta calls this ONCE when you register the
+//    webhook URL in the App Dashboard. It sends a GET request with a
+//    challenge; you must echo it back if the verify token matches.
+// ---------------------------------------------------------------------------
 app.get("/webhook", (req, res) => {
   const mode = req.query["hub.mode"];
   const token = req.query["hub.verify_token"];
@@ -21,7 +27,12 @@ app.get("/webhook", (req, res) => {
   return res.sendStatus(403);
 });
 
+// ---------------------------------------------------------------------------
+// 2) Incoming messages — Meta POSTs here every time someone messages your
+//    WhatsApp number.
+// ---------------------------------------------------------------------------
 app.post("/webhook", async (req, res) => {
+  // Always ACK immediately so Meta doesn't retry/timeout on you.
   res.sendStatus(200);
 
   try {
@@ -31,11 +42,34 @@ app.post("/webhook", async (req, res) => {
     const message = value?.messages?.[0];
 
     if (!message) {
+      // Could be a status update (delivered/read) rather than a new message — ignore.
       return;
     }
 
-    const from = message.from;
+    if (message.type !== "text") {
+      const from = message.from;
+      await sendWhatsAppMessage(from, "I can only read text messages right now — try typing your question.");
+      return;
+    }
 
+    const from = message.from; // sender's phone number
+    const text = message.text.body;
+
+    console.log(`Incoming from ${from}: ${text}`);
+
+    const identity = getIdentityForPhone(from);
+    logExchange({
+      phone: from,
+      name: identity?.name,
+      role: identity?.role || "unregistered",
+      direction: "incoming",
+      message: text,
+    });
+
+    // Show the native "typing..." indicator right away - best-effort, don't
+    // block on it. If the reply takes a while (multi-tool GHL calls can),
+    // the indicator alone might expire after 25s with nothing sent yet, so
+    // a text fallback fires after FALLBACK_DELAY_MS if we're still working.
     sendTypingIndicator(message.id);
 
     const FALLBACK_DELAY_MS = 8000;
@@ -48,32 +82,18 @@ app.post("/webhook", async (req, res) => {
       }
     }, FALLBACK_DELAY_MS);
 
-    let text;
-
-    if (message.type === "text") {
-      text = message.text.body;
-      console.log(`Incoming from ${from}: ${text}`);
-    } else if (message.type === "audio") {
-      console.log(`Incoming voice note from ${from}, transcribing...`);
-      try {
-        text = await transcribeWhatsAppVoiceNote(message.audio.id);
-        console.log(`Transcribed from ${from}: ${text}`);
-      } catch (err) {
-        console.error("Voice note transcription failed:", err.message);
-        clearTimeout(fallbackTimer);
-        await sendWhatsAppMessage(from, "Couldn't transcribe that voice note — try again or send it as text.");
-        return;
-      }
-    } else {
-      clearTimeout(fallbackTimer);
-      await sendWhatsAppMessage(from, "I can only read text messages or voice notes right now.");
-      return;
-    }
-
     const reply = await askClaude(from, text);
     replied = true;
     clearTimeout(fallbackTimer);
     await sendWhatsAppMessage(from, reply);
+
+    logExchange({
+      phone: from,
+      name: identity?.name,
+      role: identity?.role || "unregistered",
+      direction: "outgoing",
+      message: reply,
+    });
   } catch (err) {
     console.error("Error handling incoming webhook:", err);
   }
