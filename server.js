@@ -3,7 +3,8 @@ import express from "express";
 import { sendWhatsAppMessage, sendTypingIndicator } from "./whatsapp.js";
 import { askClaude } from "./claude.js";
 import { logExchange } from "./conversationLog.js";
-import { getIdentityForPhone } from "./brokerRoster.js";
+import { getIdentityForPhone, BROKER_ROSTER } from "./brokerRoster.js";
+import { generateMorningDigest } from "./digest.js";
 
 const app = express();
 app.use(express.json());
@@ -101,6 +102,53 @@ app.post("/webhook", async (req, res) => {
 
 app.get("/", (req, res) => {
   res.send("365 Yachts WhatsApp bot is running.");
+});
+
+// ---------------------------------------------------------------------------
+// 3) Digest trigger (Chapter 1) — called by an external scheduler (Make.com
+//    or similar) on a timer. Protected by a shared secret since this fires
+//    proactive messages to everyone in the roster - not something that
+//    should be triggerable by just anyone who finds the URL.
+//    Responds immediately and processes in the background: generating and
+//    sending a digest per person can take a while (each one is its own
+//    multi-tool GHL scan + Claude call), well beyond what most schedulers
+//    will wait on for a synchronous response.
+// ---------------------------------------------------------------------------
+app.post("/trigger/digest", (req, res) => {
+  const header = req.headers["authorization"] || "";
+  const token = header.startsWith("Bearer ") ? header.slice(7) : null;
+
+  if (!token || token !== process.env.TRIGGER_SECRET) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+
+  const roster = Object.entries(BROKER_ROSTER).map(([phone, identity]) => ({ phone, ...identity }));
+
+  res.status(202).json({ status: "accepted", recipients: roster.length });
+
+  (async () => {
+    for (const person of roster) {
+      try {
+        console.log(`Generating morning digest for ${person.name} (${person.phone})...`);
+        const digest = await generateMorningDigest(person);
+        await sendWhatsAppMessage(person.phone, digest);
+        logExchange({
+          phone: person.phone,
+          name: person.name,
+          role: person.role,
+          direction: "outgoing",
+          message: `[MORNING DIGEST]\n${digest}`,
+        });
+        console.log(`Digest sent to ${person.name}.`);
+      } catch (err) {
+        console.error(`Failed to generate/send digest for ${person.name}:`, err.message);
+      }
+      // Small gap between sends so a batch of digests doesn't hammer the
+      // GHL MCP server / Anthropic API all at once.
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+    }
+    console.log("Digest run complete.");
+  })();
 });
 
 const PORT = process.env.PORT || 3000;
