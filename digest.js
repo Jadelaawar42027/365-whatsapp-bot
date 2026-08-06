@@ -13,11 +13,19 @@ const MORNING_DIGEST_INSTRUCTIONS = `Generate this person's MORNING DIGEST for t
 
 CRITICAL - this is a finished message being delivered directly to them on WhatsApp, not a live chat
 turn. Never narrate what you're doing ("let me check...", "now let me pull...", "good overview, moving
-on to..."). Don't describe your research process at all. Go straight to using the tools you need, then
-write ONLY the finished digest as your response - nothing about how you got there. Write directly TO
-the person, second person ("you", "your leads"), like you're texting them - never refer to them by name
-in the third person as if describing them to someone else (wrong: "Charlie's leads show..." - right:
-"Good morning Charlie! Here's what's on your plate...").
+on to...", "good, I now have everything I need..."). Don't describe your research process, and don't
+write any transition/wrap-up sentence before the digest either - go straight from tool use into the
+digest itself with nothing in between. Write directly TO the person, second person ("you", "your
+leads"), like you're texting them - never refer to them by name in the third person as if describing
+them to someone else (wrong: "Charlie's leads show..." - right: "Good morning Charlie! Here's what's
+on your plate...").
+
+MANDATORY FORMAT: once you're done using tools and are ready to write the digest, output the exact
+marker "===DIGEST===" on its own line, then immediately begin the digest right after it on the next
+line - nothing else between the marker and the digest, and nothing after the digest ends. Everything
+before "===DIGEST===" is discarded automatically, so tool use and any unavoidable intermediate text is
+fine before the marker - but the digest itself must start IMMEDIATELY at the marker with zero lead-in
+sentence, not even one word of transition.
 
 First, resolve their own GHL user ID via list_brokers (match on their name), then use
 get_broker_leads_overview for their own ID to get the full lead list with touch/call counts. For each
@@ -50,6 +58,8 @@ assigned to them at all (e.g. a leadership account with no personal deal book), 
 than returning an empty digest. Don't run get_contact_tasks on every single lead if the list is long -
 prioritize the ones that look active/relevant from the overview first, and it's fine to note that older
 or clearly-inactive leads weren't individually checked.`;
+
+const DIGEST_MARKER = "===DIGEST===";
 
 /**
  * Runs a one-shot Claude call with full tool access under the given
@@ -95,15 +105,30 @@ async function runInternalPrompt(identity, instructions) {
     { headers: { "anthropic-beta": "mcp-client-2025-04-04" } }
   );
 
-  // Only use the LAST text block, not all of them. When Claude works through
-  // several tool calls in one turn, it often narrates each step ("Let me
-  // find their ID... now let me pull conversations...") in text blocks
-  // interleaved with the tool calls. Joining every text block (as claude.js
-  // does for live chat, where narration reads naturally) is wrong here: this
-  // is a one-shot report with no live back-and-forth, so only the final,
-  // polished block - the actual digest - should ever reach the person.
-  const textBlocks = response.content.filter((block) => block.type === "text");
-  let finalText = (textBlocks[textBlocks.length - 1]?.text || "").trim();
+  // Extraction: split on the required "===DIGEST===" marker rather than
+  // trusting the model to never write a lead-in sentence. Prompt
+  // instructions alone weren't reliable enough - Claude sometimes wrote a
+  // short transition ("Good, I have what I need...") in the SAME text block
+  // as the real digest, which block-boundary splitting can't separate. A
+  // hard, code-enforced marker is deterministic instead of hopeful.
+  const allText = response.content
+    .filter((block) => block.type === "text")
+    .map((block) => block.text)
+    .join("\n");
+
+  const markerIndex = allText.lastIndexOf(DIGEST_MARKER);
+  let finalText;
+
+  if (markerIndex !== -1) {
+    finalText = allText.slice(markerIndex + DIGEST_MARKER.length).trim();
+  } else {
+    // Fallback if the model didn't include the marker for some reason -
+    // last text block is still better than nothing, and this branch
+    // logs so drift like this is visible rather than silent.
+    console.warn(`Digest for ${identity.name} did not include the ${DIGEST_MARKER} marker - falling back to last text block.`);
+    const textBlocks = response.content.filter((block) => block.type === "text");
+    finalText = (textBlocks[textBlocks.length - 1]?.text || "").trim();
+  }
 
   // Graceful degradation on truncation: rather than raising max_tokens
   // indefinitely, handle the cap being hit explicitly. Two cases:
