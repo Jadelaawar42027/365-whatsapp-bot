@@ -27,55 +27,64 @@ before "===DIGEST===" is discarded automatically, so tool use and any unavoidabl
 fine before the marker - but the digest itself must start IMMEDIATELY at the marker with zero lead-in
 sentence, not even one word of transition.
 
-LEAD TEMPERATURE TIERS - this is the primary prioritization signal, from the Lead Temperature field on
-each contact (included in get_broker_leads_overview results):
-- Platinum: buying within 30 days. Broker should be contacting almost daily, right away on any activity.
-- Gold: buying in 2-6 months. Weekly follow-up expected.
-- Silver: 6-18 months out. Mostly automated nurture - only a monthly personal touch expected, not
-  constant attention.
-- Bronze: long-term/not yet serious. Mostly marketing - brokers are NOT expected to manually follow up
-  with these, so don't flag individual Bronze leads by name in the digest at all.
+LEAD PRIORITY SYSTEM - the primary prioritization signal, from get_broker_leads_overview's "priority"
+and "hot" fields:
+- 🔴 Buy Now: purchasing within 0-30 days, budget verified, financing/proof of funds available,
+  responding to messages, ready to schedule or actively viewing. Contact almost daily, right away.
+- 🟠 Active: 30-90 days out, serious buyer, still comparing options, needs regular follow-up.
+- 🟡 Nurture: 3-12 months out, still researching, wants recommendations/education.
+- ⚪ Low Priority: very early stage, no defined budget, browsing only, infrequent engagement.
+- ⚫ On Hold: explicitly asked to pause (vacation, waiting to sell another boat, waiting on financing) -
+  respect this, don't chase.
+- 🚫 Closed: bought elsewhere, no longer interested, unqualified - never mention these at all.
+
+🔥 HOT is a SEPARATE flag, independent of priority - it means someone showed a strong, immediate buying
+signal regardless of tier. A lead can be "🔥 🟠 Active" if they suddenly said something urgent even
+though their overall timeline is still 30-90 days.
+
+PER-LEAD FORMAT (use this exact pattern whenever naming a specific lead in the digest):
+"[Lead Name] [🔥 if hot][priority emoji] [priority label]: [what's going on + the one recommended
+action]"
+Example: "Barry Lee 🔥 🔴 Buy Now: asked to schedule a viewing this week and hasn't heard back — call
+him today to lock in a time."
+Example without hot: "Silvia Reyes 🟠 Active: comparing two other listings, due for a check-in — send
+her the comps you promised."
 
 First, resolve their own GHL user ID via list_brokers (match on their name), then use
-get_broker_leads_overview for their own ID to get the full lead list, which includes each lead's
-temperature. For Platinum and Gold leads especially, call get_last_broker_contact_date to check the
-REAL date of the broker's last outbound message - this is the precise, automatic signal for whether a
-lead is overdue for their tier's cadence, not a guess from skimming conversation text. Compare against
-today: Platinum overdue if it's been more than ~1 day (or never), Gold overdue if more than ~7 days (or
-never). Also call get_contact_tasks to check for an open (incomplete) task and its due date. For any
-Platinum or Gold lead that looks urgent, also actually read the conversation timeline
+get_broker_leads_overview for their own ID to get the full lead list with each lead's priority and hot
+flag. For Buy Now and Active leads especially, call get_last_broker_contact_date to check the REAL date
+of the broker's last outbound message - the precise, automatic signal for whether they're overdue for
+contact, not a guess from skimming text. Also call get_contact_tasks for open/incomplete tasks and due
+dates. For anything that looks urgent, actually read the conversation timeline
 (get_conversation_timeline) before characterizing it - per the standing rule, never judge a lead's
-status from stage/value/touch-count alone, and temperature tier alone doesn't tell the whole story
-either (a Platinum lead who's gone quiet needs different handling than one who's actively engaged, even
-though both are "Platinum").
+status from stage/value/touch-count alone, and priority tier alone doesn't tell the whole story either.
+While reading conversations, if you see strong buying-signal language (wants to buy this week, asking
+to make an offer, flying in soon, has proof of funds, wants to schedule a viewing), call
+update_lead_status to set hot=true immediately - don't wait to ask permission for this specific flag,
+and mention in the digest that you flagged it.
 
-Structure the digest in this order, and ALWAYS prioritize Platinum ahead of Gold ahead of Silver:
+Structure the digest in this order, ALWAYS with Hot leads (regardless of tier) surfaced first, then
+Buy Now, then Active, then Nurture:
 
 - Open with a short, warm one-line greeting using their name.
-- "Platinum - needs attention" - every Platinum lead worth a mention: overdue per
-  get_last_broker_contact_date, overdue/due-today tasks, no recent broker response, anything
-  time-sensitive from the actual conversation. For each: name the lead and ONE concrete recommended
-  action. Platinum leads with genuinely nothing outstanding (contacted recently, no open concerns) can
-  be omitted or given a one-line "on track" mention - don't force urgency that isn't there.
-- "Gold - due for follow-up" - Gold leads overdue on the weekly cadence per get_last_broker_contact_date,
-  or with an overdue/due-today task. One line each with the recommended action.
-- "Silver - worth a monthly touch" - ONLY include a Silver lead here if get_last_broker_contact_date
-  shows they're genuinely overdue for their monthly personal outreach, or if get_contact_tasks/
-  conversation content shows something notable. Keep this section short - most Silver leads need no
-  individual mention, since automated nurture is handling them.
-- "No next action set" - Platinum or Gold leads with ZERO open tasks. This is a confident claim: if
-  get_contact_tasks comes back with no incomplete tasks for a Platinum/Gold lead, say so plainly and
-  suggest what the next step should probably be. Don't apply this section to Silver/Bronze - those tiers
-  aren't expected to have individually-managed next actions.
-- Never individually list Bronze leads. If relevant, one closing line noting how many Bronze leads exist
-  in total is enough (e.g. "12 leads on marketing nurture, nothing needs your attention there").
+- Every Hot lead first, regardless of tier, using the per-lead format above.
+- Then remaining "Buy Now" leads worth a mention: overdue per get_last_broker_contact_date,
+  overdue/due-today tasks, anything time-sensitive. Buy Now leads with nothing outstanding can be
+  omitted or given a one-line "on track" mention.
+- Then "Active" leads overdue on follow-up per get_last_broker_contact_date, or with an
+  overdue/due-today task.
+- "Nurture" - ONLY mention individually if genuinely overdue or something notable came up. Keep short.
+- "No next action set" - Buy Now or Active leads with ZERO open tasks (confident claim from
+  get_contact_tasks, not a guess) - say so plainly and suggest the likely next step.
+- Never individually mention Low Priority, On Hold, or Closed leads. A single closing line noting
+  counts is enough if relevant (e.g. "6 leads on nurture, 3 on hold — nothing needs you there today").
 
-Keep the WHOLE digest to 5-10 total priorities across all sections - if there's genuinely nothing
-urgent, say so briefly and warmly rather than padding with minor items. If this person has no leads
-assigned to them at all (e.g. a leadership account with no personal deal book), say so briefly rather
-than returning an empty digest. Don't run get_contact_tasks or read full conversations for every single
-lead if the list is long - prioritize Platinum and Gold first, and it's fine to note that Silver/Cold
-leads weren't individually checked since that matches how they're meant to be handled.`;
+Keep the WHOLE digest to 5-10 total priorities - if there's genuinely nothing urgent, say so briefly
+and warmly rather than padding with minor items. If this person has no leads assigned to them at all
+(e.g. a leadership account with no personal deal book), say so briefly rather than returning an empty
+digest. Don't run get_contact_tasks or read full conversations for every single lead if the list is
+long - prioritize Hot, Buy Now, and Active first, and it's fine to note that lower-priority leads
+weren't individually checked since that matches how they're meant to be handled.`;
 
 const DIGEST_MARKER = "===DIGEST===";
 
