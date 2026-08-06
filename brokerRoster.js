@@ -16,7 +16,7 @@ export const BROKER_ROSTER = {
   // --- Leadership: full access to everything ---
   '34645496611': { name: 'Charlie Seitz', role: 'leadership' },
   // '15614459241': { name: 'Shelly', role: 'leadership' },
-  '12244278061': { name: 'Max Sereda', role: 'leadership' },
+  '12244278061': { name: 'Nicolette Cervone', role: 'leadership' },
 
   // --- Brokers: restricted to their own contacts/deals only ---
   // '1XXXXXXXXXX': { name: 'Broker Name (must match GHL exactly)', role: 'broker' },
