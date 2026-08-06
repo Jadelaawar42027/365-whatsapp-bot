@@ -40,11 +40,11 @@ export async function askClaude(phone, userMessage) {
   const baseSystemPrompt = await getSystemPrompt();
   const identity = getIdentityForPhone(phone);
 
-  let systemPrompt = baseSystemPrompt;
+  let userContext;
   let mcpServers;
 
   if (identity) {
-    systemPrompt += `\n\n---\n\nCURRENT USER: ${identity.name}, role: ${identity.role}. ` +
+    userContext = `CURRENT USER: ${identity.name}, role: ${identity.role}. ` +
       (identity.role === "leadership"
         ? "This person has full access to all contacts, deals, and broker performance data."
         : "This person is a broker restricted to their OWN assigned contacts and deals only. " +
@@ -61,15 +61,27 @@ export async function askClaude(phone, userMessage) {
       },
     ];
   } else {
-    systemPrompt += `\n\n---\n\nCURRENT USER: not on the broker roster. You have NO access to GHL/CRM ` +
+    userContext = `CURRENT USER: not on the broker roster. You have NO access to GHL/CRM ` +
       `tools for this conversation. If asked about leads, deals, or CRM data, explain that this number ` +
       `isn't registered yet and to contact Aj to get added.`;
   }
 
+  // Prompt caching: the base system prompt (core rules + knowledge base doc)
+  // is identical across every call for every user - a textbook cache
+  // candidate. It's marked as its own block with cache_control so repeat
+  // calls within the 5-minute window pay ~10% of normal input price for
+  // this ~8-9k token block instead of full price every time.
+  //
+  // IMPORTANT: per-user content (name/role) must stay OUT of the cached
+  // block - caching requires byte-for-byte identical content, so anything
+  // that varies per person goes in a separate, small, uncached block after it.
   const requestBody = {
     model: "claude-sonnet-4-6",
     max_tokens: 1500,
-    system: systemPrompt,
+    system: [
+      { type: "text", text: baseSystemPrompt, cache_control: { type: "ephemeral" } },
+      { type: "text", text: userContext },
+    ],
     messages: history,
   };
   if (mcpServers) requestBody.mcp_servers = mcpServers;

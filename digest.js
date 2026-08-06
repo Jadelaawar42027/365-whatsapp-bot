@@ -46,19 +46,30 @@ or clearly-inactive leads weren't individually checked.`;
 /**
  * Runs a one-shot Claude call with full tool access under the given
  * identity, for internal report generation rather than a live chat reply.
+ *
+ * Prompt caching: the base system prompt AND the digest instructions are
+ * identical across every person in a digest run (only name/role differ) -
+ * so both go in one cached block, with just the tiny per-person line left
+ * uncached. Since the trigger endpoint loops through everyone ~1s apart,
+ * this means only the FIRST person's digest pays full price; the rest hit
+ * cache on this entire block.
  */
 async function runInternalPrompt(identity, instructions) {
   const baseSystemPrompt = await getSystemPrompt();
-  const systemPrompt = `${baseSystemPrompt}\n\n---\n\nCURRENT USER: ${identity.name}, role: ${identity.role}. ` +
+  const staticBlock = `${baseSystemPrompt}\n\n---\n\n` +
     `This is an automated internal report generation task, not a live chat reply - the person will read ` +
     `this as a WhatsApp message with no chance to ask follow-up questions in this exchange, so be complete ` +
     `enough to be useful but keep the WhatsApp-length/formatting rules from above.\n\n${instructions}`;
+  const userContext = `CURRENT USER: ${identity.name}, role: ${identity.role}.`;
 
   const response = await anthropic.messages.create(
     {
       model: "claude-sonnet-4-6",
       max_tokens: 2000,
-      system: systemPrompt,
+      system: [
+        { type: "text", text: staticBlock, cache_control: { type: "ephemeral" } },
+        { type: "text", text: userContext },
+      ],
       messages: [{ role: "user", content: "Generate the report now." }],
       mcp_servers: [
         {
