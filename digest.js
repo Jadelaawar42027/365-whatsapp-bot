@@ -11,6 +11,14 @@ const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
 const MORNING_DIGEST_INSTRUCTIONS = `Generate this person's MORNING DIGEST for today.
 
+CRITICAL - this is a finished message being delivered directly to them on WhatsApp, not a live chat
+turn. Never narrate what you're doing ("let me check...", "now let me pull...", "good overview, moving
+on to..."). Don't describe your research process at all. Go straight to using the tools you need, then
+write ONLY the finished digest as your response - nothing about how you got there. Write directly TO
+the person, second person ("you", "your leads"), like you're texting them - never refer to them by name
+in the third person as if describing them to someone else (wrong: "Charlie's leads show..." - right:
+"Good morning Charlie! Here's what's on your plate...").
+
 First, resolve their own GHL user ID via list_brokers (match on their name), then use
 get_broker_leads_overview for their own ID to get the full lead list with touch/call counts. For each
 lead worth considering for the digest, call get_contact_tasks to check whether they have an open
@@ -83,11 +91,15 @@ async function runInternalPrompt(identity, instructions) {
     { headers: { "anthropic-beta": "mcp-client-2025-04-04" } }
   );
 
-  return response.content
-    .filter((block) => block.type === "text")
-    .map((block) => block.text)
-    .join("\n")
-    .trim();
+  // Only use the LAST text block, not all of them. When Claude works through
+  // several tool calls in one turn, it often narrates each step ("Let me
+  // find their ID... now let me pull conversations...") in text blocks
+  // interleaved with the tool calls. Joining every text block (as claude.js
+  // does for live chat, where narration reads naturally) is wrong here: this
+  // is a one-shot report with no live back-and-forth, so only the final,
+  // polished block - the actual digest - should ever reach the person.
+  const textBlocks = response.content.filter((block) => block.type === "text");
+  return (textBlocks[textBlocks.length - 1]?.text || "").trim();
 }
 
 /**
