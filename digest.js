@@ -73,7 +73,11 @@ async function runInternalPrompt(identity, instructions) {
   const response = await anthropic.messages.create(
     {
       model: "claude-sonnet-4-6",
-      max_tokens: 2000,
+      // A moderate, controlled budget rather than an unbounded ceiling -
+      // if a run genuinely needs more (a broker with a very long lead
+      // list), the fallback below kicks in instead of the response just
+      // going missing.
+      max_tokens: 3000,
       system: [
         { type: "text", text: staticBlock, cache_control: { type: "ephemeral" } },
         { type: "text", text: userContext },
@@ -99,7 +103,27 @@ async function runInternalPrompt(identity, instructions) {
   // is a one-shot report with no live back-and-forth, so only the final,
   // polished block - the actual digest - should ever reach the person.
   const textBlocks = response.content.filter((block) => block.type === "text");
-  return (textBlocks[textBlocks.length - 1]?.text || "").trim();
+  let finalText = (textBlocks[textBlocks.length - 1]?.text || "").trim();
+
+  // Graceful degradation on truncation: rather than raising max_tokens
+  // indefinitely, handle the cap being hit explicitly. Two cases:
+  // (1) generation was cut off mid-tool-call, before ever writing the
+  //     digest - there's nothing usable to send, so say so plainly.
+  // (2) generation was cut off while writing the digest itself - send
+  //     what was written, clearly marked as incomplete, rather than
+  //     silently dropping it.
+  if (response.stop_reason === "max_tokens") {
+    console.warn(`Digest for ${identity.name} hit the max_tokens cap (stop_reason: max_tokens).`);
+
+    if (finalText) {
+      finalText += "\n\n_(Cut off — hit a response length limit before finishing. Ask me to continue for the rest.)_";
+    } else {
+      finalText = "I started pulling your digest together but hit a response length limit before I could " +
+        "finish writing it. Try asking me again, or ping Aj if this keeps happening.";
+    }
+  }
+
+  return finalText;
 }
 
 /**

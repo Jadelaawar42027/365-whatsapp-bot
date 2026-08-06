@@ -77,7 +77,12 @@ export async function askClaude(phone, userMessage) {
   // that varies per person goes in a separate, small, uncached block after it.
   const requestBody = {
     model: "claude-sonnet-4-6",
-    max_tokens: 1500,
+    // A moderate, controlled budget covering the whole agentic turn (tool
+    // calls + narration + final reply), not just the visible answer. Rather
+    // than raising this indefinitely, truncation is handled explicitly
+    // below - see digest.js for the fuller explanation of why a tight cap
+    // can otherwise cut a reply off mid-generation on complex questions.
+    max_tokens: 2000,
     system: [
       { type: "text", text: baseSystemPrompt, cache_control: { type: "ephemeral" } },
       { type: "text", text: userContext },
@@ -91,11 +96,25 @@ export async function askClaude(phone, userMessage) {
     { headers: { "anthropic-beta": "mcp-client-2025-04-04" } }
   );
 
-  const replyText = response.content
+  let replyText = response.content
     .filter((block) => block.type === "text")
     .map((block) => block.text)
     .join("\n")
     .trim();
+
+  // Graceful degradation on truncation, same pattern as the digest engine:
+  // send whatever real content exists (clearly marked as cut off), or a
+  // plain "hit a limit" message if there's nothing usable yet.
+  if (response.stop_reason === "max_tokens") {
+    console.warn(`Reply to ${phone} hit the max_tokens cap (stop_reason: max_tokens).`);
+
+    if (replyText) {
+      replyText += "\n\n_(Cut off — hit a response length limit. Ask me to continue if you need the rest.)_";
+    } else {
+      replyText = "I hit a response length limit before I could finish answering that — try asking again, " +
+        "maybe in a more specific way, or ping Aj if this keeps happening.";
+    }
+  }
 
   history.push({ role: "assistant", content: replyText });
 
