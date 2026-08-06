@@ -14,7 +14,7 @@
 
 export const BROKER_ROSTER = {
   // --- Leadership: full access to everything ---
-  '34645496611': { name: 'Aj El Aawar', role: 'leadership' },
+  '34645496611': { name: 'Charlie Seitz', role: 'leadership' },
   // '15614459241': { name: 'Shelly', role: 'leadership' },
   '12244278061': { name: 'Max Sereda', role: 'leadership' },
 
