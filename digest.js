@@ -25,7 +25,9 @@ marker "===DIGEST===" on its own line, then immediately begin the digest right a
 line - nothing else between the marker and the digest, and nothing after the digest ends. Everything
 before "===DIGEST===" is discarded automatically, so tool use and any unavoidable intermediate text is
 fine before the marker - but the digest itself must start IMMEDIATELY at the marker with zero lead-in
-sentence, not even one word of transition.
+sentence, not even one word of transition. When the digest is completely finished, output the exact
+marker "===END===" on its own line right after it, with NOTHING after that - no closing remark, no
+"let me know if you need anything," nothing. Both markers are required, always, every time.
 
 LEAD PRIORITY SYSTEM - the primary prioritization signal, from get_broker_leads_overview's "priority"
 and "hot" fields:
@@ -87,6 +89,7 @@ long - prioritize Hot, Buy Now, and Active first, and it's fine to note that low
 weren't individually checked since that matches how they're meant to be handled.`;
 
 const DIGEST_MARKER = "===DIGEST===";
+const END_MARKER = "===END===";
 
 /**
  * Runs a one-shot Claude call with full tool access under the given
@@ -132,22 +135,26 @@ async function runInternalPrompt(identity, instructions) {
     { headers: { "anthropic-beta": "mcp-client-2025-04-04" } }
   );
 
-  // Extraction: split on the required "===DIGEST===" marker rather than
-  // trusting the model to never write a lead-in sentence. Prompt
-  // instructions alone weren't reliable enough - Claude sometimes wrote a
-  // short transition ("Good, I have what I need...") in the SAME text block
-  // as the real digest, which block-boundary splitting can't separate. A
-  // hard, code-enforced marker is deterministic instead of hopeful.
+  // Extraction: split on the required start/end markers rather than
+  // trusting the model to never write a lead-in or trailing sentence.
+  // Prompt instructions alone weren't reliable enough - Claude sometimes
+  // wrote a short transition ("Good, I have what I need...") in the SAME
+  // text block as the real digest, which block-boundary splitting can't
+  // separate, and could similarly tack on a closing remark after the
+  // digest ends. Hard, code-enforced markers on BOTH ends are
+  // deterministic instead of hopeful.
   const allText = response.content
     .filter((block) => block.type === "text")
     .map((block) => block.text)
     .join("\n");
 
-  const markerIndex = allText.lastIndexOf(DIGEST_MARKER);
+  const startIndex = allText.lastIndexOf(DIGEST_MARKER);
   let finalText;
 
-  if (markerIndex !== -1) {
-    finalText = allText.slice(markerIndex + DIGEST_MARKER.length).trim();
+  if (startIndex !== -1) {
+    const afterStart = allText.slice(startIndex + DIGEST_MARKER.length);
+    const endIndex = afterStart.indexOf(END_MARKER);
+    finalText = (endIndex !== -1 ? afterStart.slice(0, endIndex) : afterStart).trim();
   } else {
     // Fallback if the model didn't include the marker for some reason -
     // last text block is still better than nothing, and this branch
