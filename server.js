@@ -5,6 +5,7 @@ import { askClaude } from "./claude.js";
 import { logExchange } from "./conversationLog.js";
 import { getIdentityForPhone, BROKER_ROSTER } from "./brokerRoster.js";
 import { generateMorningDigest } from "./digest.js";
+import { generateEODCheckin } from "./eodCheckin.js";
 
 const app = express();
 app.use(express.json());
@@ -105,50 +106,68 @@ app.get("/", (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
-// 3) Digest trigger (Chapter 1) — called by an external scheduler (Make.com
-//    or similar) on a timer. Protected by a shared secret since this fires
-//    proactive messages to everyone in the roster - not something that
-//    should be triggerable by just anyone who finds the URL.
-//    Responds immediately and processes in the background: generating and
-//    sending a digest per person can take a while (each one is its own
-//    multi-tool GHL scan + Claude call), well beyond what most schedulers
-//    will wait on for a synchronous response.
+// 3) Scheduled report triggers (Chapters 1 + 9) — called by an external
+//    scheduler (Make.com or similar) on a timer. Protected by a shared
+//    secret since these fire proactive messages to everyone in the roster -
+//    not something that should be triggerable by just anyone who finds the
+//    URL. Both respond immediately and process in the background: each
+//    person's report can take a while (its own multi-tool GHL scan + Claude
+//    call), well beyond what most schedulers will wait on synchronously.
 // ---------------------------------------------------------------------------
-app.post("/trigger/digest", (req, res) => {
+
+function requireTriggerAuth(req, res) {
   const header = req.headers["authorization"] || "";
   const token = header.startsWith("Bearer ") ? header.slice(7) : null;
-
   if (!token || token !== process.env.TRIGGER_SECRET) {
-    return res.status(401).json({ error: "Unauthorized" });
+    res.status(401).json({ error: "Unauthorized" });
+    return false;
   }
+  return true;
+}
 
+/**
+ * Runs generatorFn for every roster entry and sends the result via
+ * WhatsApp, logging each exchange. One person's failure is caught and
+ * logged rather than aborting the rest of the batch.
+ */
+async function runBatchReport(generatorFn, reportLabel) {
   const roster = Object.entries(BROKER_ROSTER).map(([phone, identity]) => ({ phone, ...identity }));
 
-  res.status(202).json({ status: "accepted", recipients: roster.length });
-
-  (async () => {
-    for (const person of roster) {
-      try {
-        console.log(`Generating morning digest for ${person.name} (${person.phone})...`);
-        const digest = await generateMorningDigest(person);
-        await sendWhatsAppMessage(person.phone, digest);
-        logExchange({
-          phone: person.phone,
-          name: person.name,
-          role: person.role,
-          direction: "outgoing",
-          message: `[MORNING DIGEST]\n${digest}`,
-        });
-        console.log(`Digest sent to ${person.name}.`);
-      } catch (err) {
-        console.error(`Failed to generate/send digest for ${person.name}:`, err.message);
-      }
-      // Small gap between sends so a batch of digests doesn't hammer the
-      // GHL MCP server / Anthropic API all at once.
-      await new Promise((resolve) => setTimeout(resolve, 1000));
+  for (const person of roster) {
+    try {
+      console.log(`Generating ${reportLabel} for ${person.name} (${person.phone})...`);
+      const report = await generatorFn(person);
+      await sendWhatsAppMessage(person.phone, report);
+      logExchange({
+        phone: person.phone,
+        name: person.name,
+        role: person.role,
+        direction: "outgoing",
+        message: `[${reportLabel.toUpperCase()}]\n${report}`,
+      });
+      console.log(`${reportLabel} sent to ${person.name}.`);
+    } catch (err) {
+      console.error(`Failed to generate/send ${reportLabel} for ${person.name}:`, err.message);
     }
-    console.log("Digest run complete.");
-  })();
+    // Small gap between sends so a batch doesn't hammer the GHL MCP server
+    // / Anthropic API all at once.
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+  }
+  console.log(`${reportLabel} run complete.`);
+}
+
+app.post("/trigger/digest", (req, res) => {
+  if (!requireTriggerAuth(req, res)) return;
+  const roster = Object.entries(BROKER_ROSTER);
+  res.status(202).json({ status: "accepted", recipients: roster.length });
+  runBatchReport(generateMorningDigest, "morning digest");
+});
+
+app.post("/trigger/eod-checkin", (req, res) => {
+  if (!requireTriggerAuth(req, res)) return;
+  const roster = Object.entries(BROKER_ROSTER);
+  res.status(202).json({ status: "accepted", recipients: roster.length });
+  runBatchReport(generateEODCheckin, "EOD check-in");
 });
 
 const PORT = process.env.PORT || 3000;
