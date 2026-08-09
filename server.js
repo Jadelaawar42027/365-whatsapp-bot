@@ -6,6 +6,7 @@ import { logExchange } from "./conversationLog.js";
 import { getIdentityForPhone, BROKER_ROSTER } from "./brokerRoster.js";
 import { generateMorningDigest } from "./digest.js";
 import { generateEODCheckin } from "./eodCheckin.js";
+import { transcribeWhatsAppVoiceNote } from "./voiceTranscription.js";
 
 const app = express();
 app.use(express.json());
@@ -48,25 +49,13 @@ app.post("/webhook", async (req, res) => {
       return;
     }
 
-    if (message.type !== "text") {
+    if (message.type !== "text" && message.type !== "audio") {
       const from = message.from;
-      await sendWhatsAppMessage(from, "I can only read text messages right now — try typing your question.");
+      await sendWhatsAppMessage(from, "I can only read text messages or voice notes right now.");
       return;
     }
 
     const from = message.from; // sender's phone number
-    const text = message.text.body;
-
-    console.log(`Incoming from ${from}: ${text}`);
-
-    const identity = getIdentityForPhone(from);
-    logExchange({
-      phone: from,
-      name: identity?.name,
-      role: identity?.role || "unregistered",
-      direction: "incoming",
-      message: text,
-    });
 
     // Show the native "typing..." indicator right away - best-effort, don't
     // block on it. If the reply takes a while (multi-tool GHL calls can),
@@ -83,6 +72,33 @@ app.post("/webhook", async (req, res) => {
         );
       }
     }, FALLBACK_DELAY_MS);
+
+    let text;
+
+    if (message.type === "text") {
+      text = message.text.body;
+      console.log(`Incoming from ${from}: ${text}`);
+    } else {
+      console.log(`Incoming voice note from ${from}, transcribing...`);
+      try {
+        text = await transcribeWhatsAppVoiceNote(message.audio.id);
+        console.log(`Transcribed from ${from}: ${text}`);
+      } catch (err) {
+        console.error("Voice note transcription failed:", err.message);
+        clearTimeout(fallbackTimer);
+        await sendWhatsAppMessage(from, "Couldn't transcribe that voice note — try again or send it as text.");
+        return;
+      }
+    }
+
+    const identity = getIdentityForPhone(from);
+    logExchange({
+      phone: from,
+      name: identity?.name,
+      role: identity?.role || "unregistered",
+      direction: "incoming",
+      message: text,
+    });
 
     const reply = await askClaude(from, text);
     replied = true;
