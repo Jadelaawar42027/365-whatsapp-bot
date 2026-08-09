@@ -79,10 +79,11 @@ export async function runInternalReport(identity, instructions, reportLabel = "r
   const response = await anthropic.messages.create(
     {
       model: "claude-sonnet-4-6",
-      // A moderate, controlled budget rather than an unbounded ceiling -
-      // if a run genuinely needs more, the fallback below kicks in instead
-      // of the response just going missing.
-      max_tokens: 3000,
+      // A controlled budget, not an unbounded ceiling - if a run genuinely
+      // needs more (e.g. several leads needing a full conversation read
+      // for the "no next action" recommendations), the fallback below
+      // kicks in instead of the response just going missing.
+      max_tokens: 4000,
       system: [
         { type: "text", text: staticBlock, cache_control: { type: "ephemeral" } },
         { type: "text", text: userContext },

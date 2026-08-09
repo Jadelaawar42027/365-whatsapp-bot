@@ -32,7 +32,21 @@ Buy Now, then Active, then Nurture:
   overdue/due-today task.
 - "Nurture" - ONLY mention individually if genuinely overdue or something notable came up. Keep short.
 - "No next action set" - Buy Now or Active leads with ZERO open tasks (confident claim from
-  get_contact_tasks, not a guess) - say so plainly and suggest the likely next step.
+  get_contact_tasks, not a guess), PLUS any lead with NO priority tier set at all who also has no open
+  task and hasn't been touched in a while (e.g. last outbound contact is weeks/months old, or high touch
+  count with no recent activity) - these are exactly the leads most likely to have been forgotten, so
+  don't skip them just because they're untagged.
+  MANDATORY: for EVERY lead in this section, you must actually read their conversation timeline
+  (get_conversation_timeline) before listing them - never just say "no task" with no context. Each entry
+  needs its own full line in this exact format, no lazy "(flagged above)" references:
+  "[Lead Name] [priority emoji + label, or \"No priority set\" if untagged] — [one line of real context
+  from their conversation: what they want, what happened last, how long it's been]. Recommended: [ONE
+  concrete, specific next action based on what you actually read - not generic advice like \"follow up\"
+  or \"check in\", something like \"call to ask if the Kashmir listing is still a fit\" or \"text asking
+  if he's still looking after 4 months quiet - may be worth a re-qualification call\"]."
+  If a lead has no priority set, also suggest what tier it probably should be based on the conversation
+  (e.g. "looks like Active given confirmed budget" or "may be Nurture given vague timeline") and offer
+  to set it - same confirm-first rule as any priority change.
 - Never individually mention Low Priority, On Hold, or Closed leads. A single closing line noting
   counts is enough if relevant (e.g. "6 leads on nurture, 3 on hold — nothing needs you there today").
 
