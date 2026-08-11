@@ -40,11 +40,28 @@ export async function askClaude(phone, userMessage) {
   const baseSystemPrompt = await getSystemPrompt();
   const identity = getIdentityForPhone(phone);
 
+  // CRITICAL: Claude has no built-in awareness of the current date/time -
+  // it only knows what's in its context. Without this, every "is this
+  // overdue", "due today", "how many days since" comparison is a guess.
+  // This must be in the UNCACHED block since it changes on every request.
+  const now = new Date();
+  const dateContext = `CURRENT DATE/TIME: ${now.toLocaleString("en-US", {
+    timeZone: "America/New_York",
+    weekday: "long",
+    year: "numeric",
+    month: "long",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    timeZoneName: "short",
+  })}. Use this as ground truth for "today", "overdue", "how long ago", etc. - never guess or infer the
+current date from anything else.`;
+
   let userContext;
   let mcpServers;
 
   if (identity) {
-    userContext = `CURRENT USER: ${identity.name}, role: ${identity.role}. ` +
+    userContext = `${dateContext}\n\nCURRENT USER: ${identity.name}, role: ${identity.role}. ` +
       (identity.role === "leadership"
         ? "This person has full access to all contacts, deals, and broker performance data."
         : "This person is a broker restricted to their OWN assigned contacts and deals only. " +
@@ -61,7 +78,7 @@ export async function askClaude(phone, userMessage) {
       },
     ];
   } else {
-    userContext = `CURRENT USER: not on the broker roster. You have NO access to GHL/CRM ` +
+    userContext = `${dateContext}\n\nCURRENT USER: not on the broker roster. You have NO access to GHL/CRM ` +
       `tools for this conversation. If asked about leads, deals, or CRM data, explain that this number ` +
       `isn't registered yet and to contact Aj to get added.`;
   }

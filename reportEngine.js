@@ -74,7 +74,25 @@ him today to lock in a time."`;
 export async function runInternalReport(identity, instructions, reportLabel = "report") {
   const baseSystemPrompt = await getSystemPrompt();
   const staticBlock = `${baseSystemPrompt}\n\n---\n\n${REPORT_FORMAT_RULES}\n\n${instructions}`;
-  const userContext = `CURRENT USER: ${identity.name}, role: ${identity.role}.`;
+
+  // CRITICAL: same fix as claude.js - Claude has no built-in awareness of
+  // the current date/time, so every "due today", "overdue", "how long ago"
+  // judgment in a report needs this injected explicitly. Uncached, since it
+  // changes on every call (and every day).
+  const now = new Date();
+  const dateContext = `CURRENT DATE/TIME: ${now.toLocaleString("en-US", {
+    timeZone: "America/New_York",
+    weekday: "long",
+    year: "numeric",
+    month: "long",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    timeZoneName: "short",
+  })}. Use this as ground truth for "today", "overdue", "how long ago", etc. - never guess or infer the
+current date from anything else.`;
+
+  const userContext = `${dateContext}\n\nCURRENT USER: ${identity.name}, role: ${identity.role}.`;
 
   const response = await anthropic.messages.create(
     {
