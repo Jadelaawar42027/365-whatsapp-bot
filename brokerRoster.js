@@ -20,6 +20,10 @@ export const BROKER_ROSTER = {
 
   // --- Brokers: restricted to their own contacts/deals only ---
   // '1XXXXXXXXXX': { name: 'Broker Name (must match GHL exactly)', role: 'broker' },
+  '17725384547': { name: 'Nicolette Cervone', role: 'broker' },
+  '16159483641': { name: 'Charlie Seitz', role: 'broker' },
+  '17152203264': { name: 'James Klier', role: 'broker' },
+  '17542074504': { name: 'Cheryl Hazel', role: 'broker' },
 };
 
 /**
