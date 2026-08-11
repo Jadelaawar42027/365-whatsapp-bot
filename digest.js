@@ -12,13 +12,24 @@ get_broker_leads_overview for their own ID to get the full lead list with each l
 flag. For Buy Now and Active leads especially, call get_last_broker_contact_date to check the REAL date
 of the broker's last outbound message - the precise, automatic signal for whether they're overdue for
 contact, not a guess from skimming text. Also call get_contact_tasks for open/incomplete tasks and due
-dates. For anything that looks urgent, actually read the conversation timeline
-(get_conversation_timeline) before characterizing it - per the standing rule, never judge a lead's
-status from stage/value/touch-count alone, and priority tier alone doesn't tell the whole story either.
-While reading conversations, if you see strong buying-signal language (wants to buy this week, asking
-to make an offer, flying in soon, has proof of funds, wants to schedule a viewing), call
-update_lead_status to set hot=true immediately - don't wait to ask permission for this specific flag,
-and mention in the report that you flagged it.
+dates.
+
+CRITICAL - before flagging ANY lead as stale, overdue, or neglected, also call get_contact_notes. Notes
+often capture real progress that message data alone misses entirely - a broker calling on a personal
+cell, a showing that happened off-platform, a deal update - none of that shows up in
+get_last_broker_contact_date or the conversation timeline, but it WILL be in notes if it was logged.
+A lead with an old last-message-date but a recent note saying "going under contract" or "showing booked
+for tomorrow" is NOT neglected - don't flag it as overdue just because the message data looks stale.
+Cross-reference notes against message/task data before drawing any conclusion about a lead being
+forgotten.
+
+For anything that looks urgent, actually read the conversation timeline (get_conversation_timeline)
+before characterizing it - per the standing rule, never judge a lead's status from stage/value/touch-
+count alone, and priority tier alone doesn't tell the whole story either. While reading conversations,
+if you see strong buying-signal language (wants to buy this week, asking to make an offer, flying in
+soon, has proof of funds, wants to schedule a viewing), call update_lead_status to set hot=true
+immediately - don't wait to ask permission for this specific flag, and mention in the report that you
+flagged it.
 
 Structure the report in this order, ALWAYS with Hot leads (regardless of tier) surfaced first, then
 Buy Now, then Active, then Nurture:
@@ -36,10 +47,13 @@ Buy Now, then Active, then Nurture:
   task and hasn't been touched in a while (e.g. last outbound contact is weeks/months old, or high touch
   count with no recent activity) - these are exactly the leads most likely to have been forgotten, so
   don't skip them just because they're untagged.
-  MANDATORY: read their conversation timeline (get_conversation_timeline) to inform a good
-  recommendation - but the OUTPUT must be ONE SHORT SENTENCE per lead, nothing more. The broker already
-  lived the history - don't replay it back to them. NO dates, NO "here's what happened," NO narrative
-  walkthrough of the relationship. Just the name, tier, and the action.
+  MANDATORY: read their conversation timeline (get_conversation_timeline) AND their notes
+  (get_contact_notes) to inform a good recommendation - a recent note can completely change the picture
+  (e.g. a note logged yesterday saying a showing is booked means this lead does NOT belong in this
+  section at all, even if get_contact_tasks shows no open task for it yet). The OUTPUT must be ONE SHORT
+  SENTENCE per lead, nothing more. The broker already lived the history - don't replay it back to them.
+  NO dates, NO "here's what happened," NO narrative walkthrough of the relationship. Just the name,
+  tier, and the action.
   Exact format, one line, no exceptions: "[Lead Name] [priority emoji + label, or \"No priority set\"]:
   [ONE specific action]." That's the entire entry - nothing before it, nothing after it.
   Good example: "Charles Woods No priority set: call him, ask if he looked at the Naval 78 v2 — looks
