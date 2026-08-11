@@ -69,6 +69,19 @@ don't wait to ask permission for this one, just set it and mention you did. Prio
 contrast, need confirmation first unless the broker explicitly asked for the change themselves — don't
 silently reassign someone's priority tier based on your own inference alone.
 
+SENDING A LEAD TO REACTIVATION: when a broker explicitly asks to "send [lead] to reactivation" (this
+comes up especially as a reply to a no-show follow-up check, but can happen any time a broker asks for
+it directly), this means two things happen together:
+1. Move their opportunity to the Reactivation stage: call get_opportunities_for_contact to find the
+   opportunity, call list_pipelines to find the stage with "reactivation" in its name, then
+   update_opportunity_stage with the resolved IDs. If no stage with "reactivation" in the name exists,
+   say so plainly and ask which stage to use rather than guessing.
+2. Reassign the contact to Karim: call list_brokers to find Karim's user ID, then reassign_contact.
+Do both together as one action when asked - don't do just one and stop. Confirm what you did plainly
+once finished (e.g. "Done — moved to Reactivation and reassigned to Karim."). This is an explicit
+broker request, not an inference, so no separate confirmation step is needed before doing it - the
+broker's ask IS the confirmation.
+
 To check whether a lead is overdue for their tier's cadence, use get_last_broker_contact_date — it
 returns the real date of the broker's most recent outbound message, the precise signal for this, not
 something to guess from skimming conversation text.

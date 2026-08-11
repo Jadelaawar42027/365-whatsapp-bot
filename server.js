@@ -7,6 +7,7 @@ import { getIdentityForPhone, getIdentityByName, BROKER_ROSTER } from "./brokerR
 import { generateMorningDigest } from "./digest.js";
 import { generateEODCheckin } from "./eodCheckin.js";
 import { generateCallReview } from "./callReview.js";
+import { generateNoShowFollowup } from "./noShowFollowup.js";
 import { transcribeWhatsAppVoiceNote } from "./voiceTranscription.js";
 
 const app = express();
@@ -228,6 +229,50 @@ app.post("/trigger/call-review", async (req, res) => {
       console.log(`Call review sent to ${identity.name}.`);
     } catch (err) {
       console.error(`Failed to generate/send call review for ${identity.name}:`, err.message);
+    }
+  })();
+});
+
+// ---------------------------------------------------------------------------
+// 5) No-show follow-up trigger — fired by a GHL automation, same shape as
+//    call-review: workflow condition = Outcome is "Call No Show" -> Wait 24
+//    hours -> Webhook action posting contactId, contactName, brokerName.
+//    Checks for reschedule/response and asks the broker to decide if there's
+//    been none. The broker's reply (follow up vs. reactivation) flows
+//    through the normal chat pipeline in claude.js/systemPrompt.js.
+// ---------------------------------------------------------------------------
+app.post("/trigger/no-show-followup", async (req, res) => {
+  if (!requireTriggerAuth(req, res)) return;
+
+  const { contactId, contactName, brokerName } = req.body || {};
+
+  if (!contactId || !brokerName) {
+    return res.status(400).json({ error: "Missing required fields: contactId and brokerName." });
+  }
+
+  const identity = getIdentityByName(brokerName);
+  if (!identity) {
+    console.error(`No-show follow-up trigger: no roster match (or ambiguous match) for broker name "${brokerName}".`);
+    return res.status(404).json({ error: `No unique roster match for broker name "${brokerName}".` });
+  }
+
+  res.status(202).json({ status: "accepted", broker: identity.name });
+
+  (async () => {
+    try {
+      console.log(`Generating no-show follow-up for ${identity.name} on contact ${contactName || contactId}...`);
+      const followup = await generateNoShowFollowup(identity, contactId, contactName || "this lead");
+      await sendWhatsAppMessage(identity.phone, followup);
+      logExchange({
+        phone: identity.phone,
+        name: identity.name,
+        role: identity.role,
+        direction: "outgoing",
+        message: `[NO-SHOW FOLLOW-UP - ${contactName || contactId}]\n${followup}`,
+      });
+      console.log(`No-show follow-up sent to ${identity.name}.`);
+    } catch (err) {
+      console.error(`Failed to generate/send no-show follow-up for ${identity.name}:`, err.message);
     }
   })();
 });
