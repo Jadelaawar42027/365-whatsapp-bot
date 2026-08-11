@@ -3,9 +3,10 @@ import express from "express";
 import { sendWhatsAppMessage, sendTypingIndicator } from "./whatsapp.js";
 import { askClaude } from "./claude.js";
 import { logExchange } from "./conversationLog.js";
-import { getIdentityForPhone, BROKER_ROSTER } from "./brokerRoster.js";
+import { getIdentityForPhone, getIdentityByName, BROKER_ROSTER } from "./brokerRoster.js";
 import { generateMorningDigest } from "./digest.js";
 import { generateEODCheckin } from "./eodCheckin.js";
+import { generateCallReview } from "./callReview.js";
 import { transcribeWhatsAppVoiceNote } from "./voiceTranscription.js";
 
 const app = express();
@@ -184,6 +185,51 @@ app.post("/trigger/eod-checkin", (req, res) => {
   const roster = Object.entries(BROKER_ROSTER);
   res.status(202).json({ status: "accepted", recipients: roster.length });
   runBatchReport(generateEODCheckin, "EOD check-in");
+});
+
+// ---------------------------------------------------------------------------
+// 4) Call review trigger — fired directly by a GHL automation (webhook
+//    action), not a time-based scheduler. Configure the GHL workflow to fire
+//    when a call's outcome is marked "Call Performed" (not "Call No Show"),
+//    with a webhook action POSTing JSON containing the contact's ID, name,
+//    and the assigned broker's name (all standard GHL merge fields).
+//    Reviews just that one call and messages just that one broker - not a
+//    roster-wide batch like the digest/EOD endpoints.
+// ---------------------------------------------------------------------------
+app.post("/trigger/call-review", async (req, res) => {
+  if (!requireTriggerAuth(req, res)) return;
+
+  const { contactId, contactName, brokerName } = req.body || {};
+
+  if (!contactId || !brokerName) {
+    return res.status(400).json({ error: "Missing required fields: contactId and brokerName." });
+  }
+
+  const identity = getIdentityByName(brokerName);
+  if (!identity) {
+    console.error(`Call review trigger: no roster match (or ambiguous match) for broker name "${brokerName}".`);
+    return res.status(404).json({ error: `No unique roster match for broker name "${brokerName}".` });
+  }
+
+  res.status(202).json({ status: "accepted", broker: identity.name });
+
+  (async () => {
+    try {
+      console.log(`Generating call review for ${identity.name} on contact ${contactName || contactId}...`);
+      const review = await generateCallReview(identity, contactId, contactName || "this lead");
+      await sendWhatsAppMessage(identity.phone, review);
+      logExchange({
+        phone: identity.phone,
+        name: identity.name,
+        role: identity.role,
+        direction: "outgoing",
+        message: `[CALL REVIEW - ${contactName || contactId}]\n${review}`,
+      });
+      console.log(`Call review sent to ${identity.name}.`);
+    } catch (err) {
+      console.error(`Failed to generate/send call review for ${identity.name}:`, err.message);
+    }
+  })();
 });
 
 const PORT = process.env.PORT || 3000;
