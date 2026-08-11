@@ -16,7 +16,7 @@ export const BROKER_ROSTER = {
 
   // --- Leadership: full access to everything ---
 
-'34645496611': { name: 'Nicolette Cervone', role: 'leadership' },
+'34645496611': { name: 'Joseph Graffeo', role: 'leadership' },
 // '15614459241': { name: 'Shelly', role: 'leadership' },
 // '12244278061': { name: 'Nicolette Cervone', role: 'leadership' },
 
