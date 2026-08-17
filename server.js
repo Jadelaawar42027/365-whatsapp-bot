@@ -49,7 +49,21 @@ app.post("/webhook", async (req, res) => {
     const message = value?.messages?.[0];
 
     if (!message) {
-      // Could be a status update (delivered/read) rather than a new message — ignore.
+      // Not a new message - could be a delivery status callback
+      // (sent/delivered/read/failed). Log failures specifically, since a
+      // message that our code thinks "sent" successfully (no thrown error)
+      // can still fail to actually deliver - most commonly because it's
+      // outside WhatsApp's 24-hour window for free-form messages to that
+      // recipient. Without this, that kind of failure is completely silent.
+      const status = value?.statuses?.[0];
+      if (status?.status === "failed") {
+        const errorDetail = status.errors?.[0];
+        console.error(
+          `WhatsApp delivery FAILED to ${status.recipient_id}: ` +
+          `${errorDetail?.title || "unknown error"} ` +
+          `(code ${errorDetail?.code || "?"}) - ${errorDetail?.message || ""}`
+        );
+      }
       return;
     }
 
