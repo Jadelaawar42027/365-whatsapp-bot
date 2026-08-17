@@ -3,11 +3,13 @@ import express from "express";
 import { sendWhatsAppMessage, sendTypingIndicator } from "./whatsapp.js";
 import { askClaude } from "./claude.js";
 import { logExchange } from "./conversationLog.js";
-import { getIdentityForPhone, getIdentityByName, BROKER_ROSTER } from "./brokerRoster.js";
+import { getIdentityForPhone, getIdentityByName, getLeadershipEntries, BROKER_ROSTER } from "./brokerRoster.js";
 import { generateMorningDigest } from "./digest.js";
 import { generateEODCheckin } from "./eodCheckin.js";
 import { generateCallReview } from "./callReview.js";
 import { generateNoShowFollowup } from "./noShowFollowup.js";
+import { formatCollectedAlerts } from "./leadershipDigest.js";
+import { generateBrokerPerformanceReview } from "./brokerPerformanceReview.js";
 import { transcribeWhatsAppVoiceNote } from "./voiceTranscription.js";
 
 const app = express();
@@ -174,11 +176,90 @@ async function runBatchReport(generatorFn, reportLabel) {
   console.log(`${reportLabel} run complete.`);
 }
 
+/**
+ * Morning digest run: brokers first (each digest generation also extracts
+ * "leadership flags" - near-close deals, alerts - in the SAME Claude call,
+ * no extra scan), THEN leadership last: their own personal digest, followed
+ * by a compiled summary built purely from the flags already collected
+ * during the broker loop - zero additional tool calls for that summary.
+ */
+async function runMorningDigestSequence() {
+  const roster = Object.entries(BROKER_ROSTER).map(([phone, identity]) => ({ phone, ...identity }));
+  const brokers = roster.filter((p) => p.role === "broker");
+  const leadership = roster.filter((p) => p.role === "leadership");
+
+  const collectedFlags = [];
+
+  for (const person of brokers) {
+    try {
+      console.log(`Generating morning digest for ${person.name} (${person.phone})...`);
+      const { text, flags } = await generateMorningDigest(person);
+      await sendWhatsAppMessage(person.phone, text);
+      logExchange({
+        phone: person.phone,
+        name: person.name,
+        role: person.role,
+        direction: "outgoing",
+        message: `[MORNING DIGEST]\n${text}`,
+      });
+      console.log(`Morning digest sent to ${person.name}. Flags collected: ${flags.length}`);
+      for (const flag of flags) {
+        collectedFlags.push({ ...flag, brokerName: person.name });
+      }
+    } catch (err) {
+      console.error(`Failed to generate/send morning digest for ${person.name}:`, err.message);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+  }
+
+  // Leadership goes LAST: their own personal digest (if they have a
+  // personal deal book), then the compiled team summary from everything
+  // collected above - no second scan needed for that summary.
+  for (const person of leadership) {
+    try {
+      console.log(`Generating morning digest for leadership ${person.name} (${person.phone})...`);
+      const { text } = await generateMorningDigest(person);
+      await sendWhatsAppMessage(person.phone, text);
+      logExchange({
+        phone: person.phone,
+        name: person.name,
+        role: person.role,
+        direction: "outgoing",
+        message: `[MORNING DIGEST]\n${text}`,
+      });
+      console.log(`Morning digest sent to ${person.name}.`);
+    } catch (err) {
+      console.error(`Failed to generate/send morning digest for ${person.name}:`, err.message);
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+
+    try {
+      const summary = formatCollectedAlerts(collectedFlags, person.name);
+      await sendWhatsAppMessage(person.phone, summary);
+      logExchange({
+        phone: person.phone,
+        name: person.name,
+        role: person.role,
+        direction: "outgoing",
+        message: `[TEAM SUMMARY]\n${summary}`,
+      });
+      console.log(`Team summary sent to ${person.name}.`);
+    } catch (err) {
+      console.error(`Failed to send team summary to ${person.name}:`, err.message);
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+  }
+
+  console.log("Morning digest run complete.");
+}
+
 app.post("/trigger/digest", (req, res) => {
   if (!requireTriggerAuth(req, res)) return;
   const roster = Object.entries(BROKER_ROSTER);
   res.status(202).json({ status: "accepted", recipients: roster.length });
-  runBatchReport(generateMorningDigest, "morning digest");
+  runMorningDigestSequence();
 });
 
 app.post("/trigger/eod-checkin", (req, res) => {
@@ -274,6 +355,46 @@ app.post("/trigger/no-show-followup", async (req, res) => {
     } catch (err) {
       console.error(`Failed to generate/send no-show follow-up for ${identity.name}:`, err.message);
     }
+  })();
+});
+
+// ---------------------------------------------------------------------------
+// 6) Leadership briefing trigger — like the digest trigger, but scoped to
+//    leadership only and sends TWO separate messages per recipient: the
+//    hot-buyers-and-alerts digest (cross-team), then the combined broker
+//    broker performance review only. The hot-buyers-and-alerts summary is
+//    no longer generated here - it's now compiled automatically as part of
+//    /trigger/digest (see runMorningDigestSequence above), built from flags
+//    collected during each broker's digest run rather than a second scan.
+//    This endpoint remains for the performance review specifically, which
+//    still needs its own dedicated look at cadence compliance per broker.
+// ---------------------------------------------------------------------------
+app.post("/trigger/leadership-digest", (req, res) => {
+  if (!requireTriggerAuth(req, res)) return;
+  const leadership = getLeadershipEntries();
+  res.status(202).json({ status: "accepted", recipients: leadership.length });
+
+  (async () => {
+    for (const person of leadership) {
+      try {
+        console.log(`Generating broker performance review for ${person.name}...`);
+        const performance = await generateBrokerPerformanceReview(person);
+        await sendWhatsAppMessage(person.phone, performance);
+        logExchange({
+          phone: person.phone,
+          name: person.name,
+          role: person.role,
+          direction: "outgoing",
+          message: `[BROKER PERFORMANCE REVIEW]\n${performance}`,
+        });
+        console.log(`Broker performance review sent to ${person.name}.`);
+      } catch (err) {
+        console.error(`Failed to generate/send broker performance review for ${person.name}:`, err.message);
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+    }
+    console.log("Leadership briefing run complete.");
   })();
 });
 

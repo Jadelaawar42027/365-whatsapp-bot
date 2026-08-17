@@ -3,7 +3,7 @@
 // reportEngine.js) for the marker/truncation/priority-format logic common
 // to every scheduled report type.
 
-import { runInternalReport } from "./reportEngine.js";
+import { runInternalReportWithFlags } from "./reportEngine.js";
 
 const MORNING_DIGEST_INSTRUCTIONS = `Generate this person's MORNING DIGEST for today.
 
@@ -70,12 +70,35 @@ and warmly rather than padding with minor items. If this person has no leads ass
 (e.g. a leadership account with no personal deal book), say so briefly rather than returning an empty
 report. Don't run get_contact_tasks or read full conversations for every single lead if the list is
 long - prioritize Hot, Buy Now, and Active first, and it's fine to note that lower-priority leads
-weren't individually checked since that matches how they're meant to be handled.`;
+weren't individually checked since that matches how they're meant to be handled.
+
+LEADERSHIP FLAGS - after finishing the broker-facing digest above, also output a SEPARATE structured
+block for leadership visibility. This is NOT shown to the broker - it's collected across every broker's
+digest run today and compiled into one leadership summary AFTER all digests are sent, so leadership
+doesn't need a second full scan of everyone's pipeline. Only flag things that are genuinely
+leadership-worthy - most digests will have FEW or ZERO flags, that's expected and fine.
+
+Flag a lead as "near_close" if, from what you actually read in their conversation/notes, the deal looks
+like it could realistically close within roughly 2-4 weeks (e.g. under contract, offer being finalized,
+survey/closing scheduled, buyer explicitly said a timeline that fits this window).
+
+Flag a lead as "alert" if something looks genuinely wrong and leadership visibility could help - NOT
+just "overdue for cadence" (that's already normal digest content), but something more serious: a lead
+who showed clear negative sentiment and got no follow-up, a lead who went silent right after something
+concerning (a bad call, a complaint, a competitor mention), or a Buy Now/Hot lead who's been unreachable
+for an unusually long stretch given how hot they are. Use judgment - this should be rare, not routine.
+
+Output the exact marker "===FLAGS===" on its own line right after "===END===", then a JSON array (even
+if empty: []) of objects shaped like:
+{"type": "near_close" or "alert", "leadName": "...", "reason": "one short sentence"}
+Then output the exact marker "===END_FLAGS===" on its own line. Valid JSON only - no markdown code
+fences, no trailing commas, no comments. If there's nothing to flag, output an empty array: [].`;
 
 /**
  * Generates a single person's morning digest.
  * @param {{name: string, role: string}} identity - a roster entry
+ * @returns {Promise<{text: string, flags: Array}>}
  */
 export async function generateMorningDigest(identity) {
-  return runInternalReport(identity, MORNING_DIGEST_INSTRUCTIONS, "morning digest");
+  return runInternalReportWithFlags(identity, MORNING_DIGEST_INSTRUCTIONS, "morning digest");
 }

@@ -11,6 +11,8 @@ const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
 export const REPORT_MARKER = "===REPORT===";
 export const END_MARKER = "===END===";
+export const FLAGS_MARKER = "===FLAGS===";
+export const END_FLAGS_MARKER = "===END_FLAGS===";
 
 /**
  * Shared formatting/marker rules every report type must follow, appended
@@ -71,7 +73,11 @@ him today to lock in a time."`;
  *   covers those)
  * @param {string} reportLabel - used only in log messages, e.g. "morning digest"
  */
-export async function runInternalReport(identity, instructions, reportLabel = "report") {
+/**
+ * Core Claude call shared by both report modes below. Not exported -
+ * callers use runInternalReport or runInternalReportWithFlags.
+ */
+async function callForReport(identity, instructions) {
   const baseSystemPrompt = await getSystemPrompt();
   const staticBlock = `${baseSystemPrompt}\n\n---\n\n${REPORT_FORMAT_RULES}\n\n${instructions}`;
 
@@ -94,7 +100,7 @@ current date from anything else.`;
 
   const userContext = `${dateContext}\n\nCURRENT USER: ${identity.name}, role: ${identity.role}.`;
 
-  const response = await anthropic.messages.create(
+  return anthropic.messages.create(
     {
       model: "claude-sonnet-4-6",
       // A controlled budget, not an unbounded ceiling - if a run genuinely
@@ -118,40 +124,102 @@ current date from anything else.`;
     },
     { headers: { "anthropic-beta": "mcp-client-2025-04-04" } }
   );
+}
 
-  // Extraction: split on the required start/end markers rather than
-  // trusting the model to never write a lead-in or trailing sentence.
+function extractBetweenMarkers(allText, startMarker, endMarker) {
+  const startIndex = allText.lastIndexOf(startMarker);
+  if (startIndex === -1) return null;
+  const afterStart = allText.slice(startIndex + startMarker.length);
+  const endIndex = afterStart.indexOf(endMarker);
+  return (endIndex !== -1 ? afterStart.slice(0, endIndex) : afterStart).trim();
+}
+
+function applyTruncationFallback(finalText, response, identity, reportLabel) {
+  if (response.stop_reason !== "max_tokens") return finalText;
+
+  console.warn(`${reportLabel} for ${identity.name} hit the max_tokens cap (stop_reason: max_tokens).`);
+  if (finalText) {
+    return finalText + "\n\n_(Cut off — hit a response length limit before finishing. Ask me to continue for the rest.)_";
+  }
+  return `I started pulling this together but hit a response length limit before I could finish. ` +
+    `Try asking me again, or ping Aj if this keeps happening.`;
+}
+
+/**
+ * Runs a one-shot Claude call with full tool access under the given
+ * identity, for internal report generation rather than a live chat reply.
+ * Returns just the report text - unchanged behavior for existing callers
+ * (digest, EOD check-in, call review, no-show follow-up).
+ *
+ * Prompt caching: the base system prompt AND the report instructions are
+ * identical across every person in a report run (only name/role differ) -
+ * so both go in one cached block, with just the tiny per-person line left
+ * uncached. Since trigger endpoints loop through everyone ~1s apart, this
+ * means only the FIRST person's report pays full price; the rest hit cache
+ * on this entire block.
+ *
+ * @param {{name: string, role: string}} identity
+ * @param {string} instructions - report-specific instructions (does NOT
+ *   need to repeat the marker/priority rules - REPORT_FORMAT_RULES already
+ *   covers those)
+ * @param {string} reportLabel - used only in log messages, e.g. "morning digest"
+ */
+export async function runInternalReport(identity, instructions, reportLabel = "report") {
+  const response = await callForReport(identity, instructions);
+
   const allText = response.content
     .filter((block) => block.type === "text")
     .map((block) => block.text)
     .join("\n");
 
-  const startIndex = allText.lastIndexOf(REPORT_MARKER);
-  let finalText;
-
-  if (startIndex !== -1) {
-    const afterStart = allText.slice(startIndex + REPORT_MARKER.length);
-    const endIndex = afterStart.indexOf(END_MARKER);
-    finalText = (endIndex !== -1 ? afterStart.slice(0, endIndex) : afterStart).trim();
-  } else {
+  let finalText = extractBetweenMarkers(allText, REPORT_MARKER, END_MARKER);
+  if (finalText === null) {
     console.warn(`${reportLabel} for ${identity.name} did not include the ${REPORT_MARKER} marker - falling back to last text block.`);
     const textBlocks = response.content.filter((block) => block.type === "text");
     finalText = (textBlocks[textBlocks.length - 1]?.text || "").trim();
   }
 
-  // Graceful degradation on truncation: send whatever real content exists
-  // (clearly marked as cut off), or a plain "hit a limit" message if
-  // there's nothing usable yet.
-  if (response.stop_reason === "max_tokens") {
-    console.warn(`${reportLabel} for ${identity.name} hit the max_tokens cap (stop_reason: max_tokens).`);
+  return applyTruncationFallback(finalText, response, identity, reportLabel);
+}
 
-    if (finalText) {
-      finalText += "\n\n_(Cut off — hit a response length limit before finishing. Ask me to continue for the rest.)_";
-    } else {
-      finalText = `I started pulling this together but hit a response length limit before I could finish. ` +
-        `Try asking me again, or ping Aj if this keeps happening.`;
+/**
+ * Same as runInternalReport, but ALSO extracts a structured "flags" JSON
+ * block from the same response - used when a report needs to surface
+ * cross-referenceable data (e.g. near-close deals, alerts) WITHOUT a
+ * second, separate scan later. The instructions passed in must tell the
+ * model to output a JSON array between FLAGS_MARKER and END_FLAGS_MARKER,
+ * in addition to the normal REPORT_MARKER/END_MARKER report text.
+ *
+ * Returns { text, flags } - flags is always an array, empty if none were
+ * found or if parsing failed (fails safe: a formatting hiccup here should
+ * never break the actual report text, which is the primary deliverable).
+ */
+export async function runInternalReportWithFlags(identity, instructions, reportLabel = "report") {
+  const response = await callForReport(identity, instructions);
+
+  const allText = response.content
+    .filter((block) => block.type === "text")
+    .map((block) => block.text)
+    .join("\n");
+
+  let finalText = extractBetweenMarkers(allText, REPORT_MARKER, END_MARKER);
+  if (finalText === null) {
+    console.warn(`${reportLabel} for ${identity.name} did not include the ${REPORT_MARKER} marker - falling back to last text block.`);
+    const textBlocks = response.content.filter((block) => block.type === "text");
+    finalText = (textBlocks[textBlocks.length - 1]?.text || "").trim();
+  }
+  finalText = applyTruncationFallback(finalText, response, identity, reportLabel);
+
+  let flags = [];
+  const flagsRaw = extractBetweenMarkers(allText, FLAGS_MARKER, END_FLAGS_MARKER);
+  if (flagsRaw) {
+    try {
+      const parsed = JSON.parse(flagsRaw);
+      if (Array.isArray(parsed)) flags = parsed;
+    } catch (err) {
+      console.warn(`${reportLabel} for ${identity.name}: flags block wasn't valid JSON, treating as empty. Raw: ${flagsRaw.slice(0, 200)}`);
     }
   }
 
-  return finalText;
+  return { text: finalText, flags };
 }
