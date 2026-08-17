@@ -13,19 +13,16 @@
 // (digits only) as the key, their name, and their role. Restart the bot to apply.
 
 export const BROKER_ROSTER = {
-
   // --- Leadership: full access to everything ---
+  '34645496611': { name: 'Aj El Aawar', role: 'leadership' },
+  // '15614459241': { name: 'Shelly', role: 'leadership' },
+  // '12244278061': { name: 'Nicolette Cervone', role: 'leadership' },
 
-'34645496611': { name: 'Joseph Graffeo', role: 'leadership' },
-// '15614459241': { name: 'Shelly', role: 'leadership' },
-// '12244278061': { name: 'Nicolette Cervone', role: 'leadership' },
-
-// --- Brokers: restricted to their own contacts/deals only ---
-// '1XXXXXXXXXX': { name: 'Broker Name (must match GHL exactly)', role: 'broker' },
-'17725384547': { name: 'Nicolette Cervone', role: 'broker' },
-'16159483641': { name: 'Charlie Seitz', role: 'broker' },
-'17152203264': { name: 'James Klier', role: 'broker' },
-'17542074504': { name: 'Cheryl Hazel', role: 'broker' },
+  // --- Brokers: restricted to their own contacts/deals only ---
+  '17725384547': { name: 'Nicolette Cervone', role: 'broker' },
+  '16159483641': { name: 'Charlie Seitz', role: 'broker' },
+  '17152203264': { name: 'James Klier', role: 'broker' },
+  '17542074504': { name: 'Cheryl Hazel', role: 'broker' },
 };
 
 /**
@@ -51,4 +48,15 @@ export function getIdentityByName(name) {
   if (matches.length !== 1) return null;
   const [phone, identity] = matches[0];
   return { phone, ...identity };
+}
+
+/**
+ * Returns every roster entry with role 'leadership' - used for team-wide
+ * reports (hot buyers/alerts digest, broker performance review) that should
+ * go to leadership only, never to individual brokers.
+ */
+export function getLeadershipEntries() {
+  return Object.entries(BROKER_ROSTER)
+    .filter(([, identity]) => identity.role === "leadership")
+    .map(([phone, identity]) => ({ phone, ...identity }));
 }
