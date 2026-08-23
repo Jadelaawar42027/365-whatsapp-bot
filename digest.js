@@ -7,6 +7,12 @@ import { runInternalReportWithFlags } from "./reportEngine.js";
 
 const MORNING_DIGEST_INSTRUCTIONS = `Generate this person's MORNING DIGEST for today.
 
+Core goal: scan this broker's ENTIRE lead list via get_broker_leads_overview and surface the genuinely
+hottest leads that need real action TODAY. This is not a mechanical pass through every lead tagged Buy
+Now or Active - a tier is a starting point for what to look at, not a verdict on what to report. Only
+surface a lead if, after actually checking its current situation (notes, tasks, recent contact), it's
+still genuinely live and actionable right now.
+
 First, resolve their own GHL user ID via list_brokers (match on their name), then use
 get_broker_leads_overview for their own ID to get the full lead list with each lead's priority and hot
 flag. For Buy Now and Active leads especially, call get_last_broker_contact_date to check the REAL date
@@ -22,6 +28,18 @@ A lead with an old last-message-date but a recent note saying "going under contr
 for tomorrow" is NOT neglected - don't flag it as overdue just because the message data looks stale.
 Cross-reference notes against message/task data before drawing any conclusion about a lead being
 forgotten.
+
+CRITICAL - COLD LEAD OVERRIDE: before flagging ANY lead as needing action, hot, urgent, or an alert, you
+must check get_contact_notes. If the notes clearly indicate the lead has gone cold, said they're not
+interested right now, asked to be left alone, or the broker has explicitly decided to stop actively
+pursuing them - DO NOT flag this lead as needing action, regardless of what their priority tier or
+touch/task data suggests. A lead can be tagged "Active" or "Buy Now" from weeks ago and simply be
+stale/wrong now - the notes are the most current truth, not the tier. If there's a real mismatch between
+the tier and what the notes describe (e.g. tagged Active but notes say cold), you can mention that the
+tier looks out of date and suggest updating it, but that's a low-priority aside, not a reason to flag
+urgency. This rule applies to every section of this digest, and to the LEADERSHIP FLAGS block
+specifically - never mark a lead as an "alert" if notes explain the silence as an intentional,
+already-acknowledged cold lead.
 
 For anything that looks urgent, actually read the conversation timeline (get_conversation_timeline)
 before characterizing it - per the standing rule, never judge a lead's status from stage/value/touch-
