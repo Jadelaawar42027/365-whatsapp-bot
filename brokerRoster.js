@@ -41,9 +41,9 @@ export function getIdentityForPhone(phone) {
  * (fails closed rather than guessing which person to message).
  */
 export function getIdentityByName(name) {
-  const normalized = name.trim().toLowerCase();
+  const normalized = name.trim().toLowerCase().replace(/\s+/g, ' ');
   const matches = Object.entries(BROKER_ROSTER).filter(
-    ([, identity]) => identity.name.trim().toLowerCase() === normalized
+    ([, identity]) => identity.name.trim().toLowerCase().replace(/\s+/g, ' ') === normalized
   );
   if (matches.length !== 1) return null;
   const [phone, identity] = matches[0];
