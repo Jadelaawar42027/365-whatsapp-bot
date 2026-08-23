@@ -295,7 +295,12 @@ app.post("/trigger/eod-checkin", (req, res) => {
 app.post("/trigger/call-review", async (req, res) => {
   if (!requireTriggerAuth(req, res)) return;
 
-  const { contactId, contactName, brokerName } = req.body || {};
+  console.log("Call review trigger raw payload:", JSON.stringify(req.body));
+
+  const body = req.body || {};
+  const contactId = body.contactId || body.id || body.contact_id;
+  const contactName = body.contactName || body.full_name || `${body.first_name || ""} ${body.last_name || ""}`.trim();
+  const brokerName = body.brokerName || (body.user ? `${body.user.firstName || ""} ${body.user.lastName || ""}`.trim() : undefined);
 
   if (!contactId || !brokerName) {
     return res.status(400).json({ error: "Missing required fields: contactId and brokerName." });
@@ -339,7 +344,12 @@ app.post("/trigger/call-review", async (req, res) => {
 app.post("/trigger/no-show-followup", async (req, res) => {
   if (!requireTriggerAuth(req, res)) return;
 
-  const { contactId, contactName, brokerName } = req.body || {};
+  console.log("No-show follow-up trigger raw payload:", JSON.stringify(req.body));
+
+  const body = req.body || {};
+  const contactId = body.contactId || body.id || body.contact_id;
+  const contactName = body.contactName || body.full_name || `${body.first_name || ""} ${body.last_name || ""}`.trim();
+  const brokerName = body.brokerName || (body.user ? `${body.user.firstName || ""} ${body.user.lastName || ""}`.trim() : undefined);
 
   if (!contactId || !brokerName) {
     return res.status(400).json({ error: "Missing required fields: contactId and brokerName." });
