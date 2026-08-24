@@ -81,6 +81,43 @@ export async function sendWhatsAppMessage(to, text) {
 }
 
 /**
+ * Sends a pre-approved WhatsApp message template via the Meta Cloud API
+ * (as opposed to free-form text). Used to reopen a recipient's 24-hour
+ * messaging window - templates are the only message type Meta allows
+ * outside that window.
+ * @param {string} to - recipient's phone number in international format, no "+" (e.g. "34612345678")
+ * @param {string} templateName - the exact template name as approved in WhatsApp Manager
+ * @param {string} [languageCode] - template language code, defaults to 'en_US'
+ */
+export async function sendTemplateMessage(to, templateName, languageCode = "en_US") {
+  const url = `https://graph.facebook.com/${GRAPH_API_VERSION}/${process.env.WHATSAPP_PHONE_NUMBER_ID}/messages`;
+
+  try {
+    await axios.post(
+      url,
+      {
+        messaging_product: "whatsapp",
+        to,
+        type: "template",
+        template: {
+          name: templateName,
+          language: { code: languageCode },
+        },
+      },
+      {
+        headers: {
+          Authorization: `Bearer ${process.env.WHATSAPP_TOKEN}`,
+          "Content-Type": "application/json",
+        },
+      }
+    );
+  } catch (err) {
+    console.error("Failed to send WhatsApp template message:", err.response?.data || err.message);
+    throw err;
+  }
+}
+
+/**
  * Marks the given incoming message as read and shows the native "typing..."
  * indicator on the sender's device. Meta auto-dismisses it after 25 seconds
  * or as soon as a real message is sent, whichever comes first. Best-effort:

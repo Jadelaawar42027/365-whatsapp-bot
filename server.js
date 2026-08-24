@@ -1,6 +1,6 @@
 import "dotenv/config";
 import express from "express";
-import { sendWhatsAppMessage, sendTypingIndicator } from "./whatsapp.js";
+import { sendWhatsAppMessage, sendTypingIndicator, sendTemplateMessage } from "./whatsapp.js";
 import { askClaude } from "./claude.js";
 import { logExchange } from "./conversationLog.js";
 import { getIdentityForPhone, getIdentityByName, getLeadershipEntries, BROKER_ROSTER } from "./brokerRoster.js";
@@ -281,6 +281,40 @@ app.post("/trigger/eod-checkin", (req, res) => {
   const roster = Object.entries(BROKER_ROSTER);
   res.status(202).json({ status: "accepted", recipients: roster.length });
   runBatchReport(generateEODCheckin, "EOD check-in");
+});
+
+/**
+ * Sends the approved "good_morning" WhatsApp template to every roster
+ * entry (brokers and leadership alike) to reopen each person's 24-hour
+ * messaging window before regular free-form reports need to go out.
+ */
+async function runDailyTemplateSequence() {
+  const roster = Object.entries(BROKER_ROSTER).map(([phone, identity]) => ({ phone, ...identity }));
+
+  for (const person of roster) {
+    try {
+      await sendTemplateMessage(person.phone, "good_morning");
+      logExchange({
+        phone: person.phone,
+        name: person.name,
+        role: person.role,
+        direction: "outgoing",
+        message: "[DAILY TEMPLATE] Window reopen message sent",
+      });
+      console.log(`Daily template sent to ${person.name}.`);
+    } catch (err) {
+      console.error(`Failed to send daily template to ${person.name}:`, err.message);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+  }
+  console.log("Daily template run complete.");
+}
+
+app.post("/trigger/daily-template", (req, res) => {
+  if (!requireTriggerAuth(req, res)) return;
+  const roster = Object.entries(BROKER_ROSTER);
+  res.status(202).json({ status: "accepted", recipients: roster.length });
+  runDailyTemplateSequence();
 });
 
 // ---------------------------------------------------------------------------
