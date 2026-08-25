@@ -3,6 +3,12 @@
 //
 // role: 'leadership' -> full access to all contacts/deals/broker data.
 //       'broker'     -> restricted to only their own assigned contacts/deals.
+//       'setter'     -> broad READ access like leadership (can view any contact,
+//                        not just their own), but WRITE actions (tasks, notes,
+//                        priority, stage, reassignment) stay restricted to their
+//                        own assigned contacts, like a broker. Also gets a
+//                        separate setter-specific knowledge base doc instead of
+//                        the broker/leadership one (see knowledgeBase.js).
 //
 // No GHL user ID needed here - the GHL MCP server resolves it dynamically
 // from the "name" below by matching against GHL's own user list. Just make
@@ -14,7 +20,7 @@
 
 export const BROKER_ROSTER = {
   // --- Leadership: full access to everything ---
-  '34645496611': { name: 'Aj El Aawar', role: 'leadership' },
+  '34645496611': { name: 'Aj El Aawar', role: 'setter' },
   // '15614459241': { name: 'Shelly', role: 'leadership' },
   // '12244278061': { name: 'Nicolette Cervone', role: 'leadership' },
 
@@ -23,6 +29,9 @@ export const BROKER_ROSTER = {
   '16159483641': { name: 'Charlie Seitz', role: 'broker' },
   '17152203264': { name: 'James Klier', role: 'broker' },
   '17542074504': { name: 'Cheryl Hazel', role: 'broker' },
+
+  // --- Setters: outbound qualification/booking, own separate knowledge base ---
+  '48697713899': { name: 'Karim El Timani', role: 'setter' },
 };
 
 /**

@@ -37,8 +37,8 @@ export async function askClaude(phone, userMessage) {
 
   history.push({ role: "user", content: userMessage });
 
-  const baseSystemPrompt = await getSystemPrompt();
   const identity = getIdentityForPhone(phone);
+  const baseSystemPrompt = await getSystemPrompt(identity?.role || "broker");
 
   // CRITICAL: Claude has no built-in awareness of the current date/time -
   // it only knows what's in its context. Without this, every "is this
@@ -61,13 +61,29 @@ current date from anything else.`;
   let mcpServers;
 
   if (identity) {
+    const accessDescription = identity.role === "leadership"
+      ? "This person has full access to all contacts, deals, and broker performance data."
+      : identity.role === "setter"
+      ? "This person can VIEW any contact, conversation, call transcript, notes, tasks, and opportunities " +
+        "across the whole team - read access is NOT restricted to their own contacts, since setters need " +
+        "to look up any lead for qualification calls. However, WRITE actions (creating/editing tasks, " +
+        "adding notes, changing lead priority/hot flag, updating opportunity stage, reassigning a contact) " +
+        "are still restricted to contacts assigned to them, same as a broker - if a WRITE tool call returns " +
+        "\"Access denied\", explain plainly that editing someone else's contact is restricted to leadership. " +
+        "Don't retry with different arguments to try to work around a denial."
+      : "This person is a broker restricted to their OWN assigned contacts and deals only. " +
+        "The GHL tools enforce this automatically — if a tool call returns \"Access denied\", " +
+        "explain plainly that the data belongs to another broker and is restricted to leadership. " +
+        "Don't retry with different arguments to try to work around a denial.";
+
+    const setterNote = identity.role === "setter"
+      ? " This person is a setter, not a broker - their job is outbound qualification and booking " +
+        "calls, not deal management, negotiation, or closing. Follow the Setter SOPs in the KNOWLEDGE " +
+        "BASE section above rather than assuming broker playbook context applies."
+      : "";
+
     userContext = `${dateContext}\n\nCURRENT USER: ${identity.name}, role: ${identity.role}. ` +
-      (identity.role === "leadership"
-        ? "This person has full access to all contacts, deals, and broker performance data."
-        : "This person is a broker restricted to their OWN assigned contacts and deals only. " +
-          "The GHL tools enforce this automatically — if a tool call returns \"Access denied\", " +
-          "explain plainly that the data belongs to another broker and is restricted to leadership. " +
-          "Don't retry with different arguments to try to work around a denial.");
+      accessDescription + setterNote;
 
     mcpServers = [
       {
