@@ -34,6 +34,9 @@ export const BROKER_ROSTER = {
   '16159483641': { name: 'Charlie Seitz', role: 'broker' },
   '17152203264': { name: 'James Klier', role: 'broker' },
   '17542074504': { name: 'Cheryl Hazel', role: 'broker' },
+  '17812582070': { name: 'Martin Herbert-Burns', role: 'broker' },
+  '19788268166': { name: 'Joseph Graffeo', role: 'broker' },
+  '12394041441': { name: 'Peter Shaarda', role: 'broker' },
 
   // --- Setters: outbound qualification/booking, own separate knowledge base ---
   '48697713899': { name: 'Karim El Timani', role: 'setter', slack: 'U05HD0984TU' },
