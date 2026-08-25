@@ -5,8 +5,8 @@
 //
 // Setup (once, in api.slack.com/apps for this app):
 // - Enable Events API, set the Request URL to https://<this-server>/slack/events
-// - Subscribe to bot event "message.im" (DMs only, for now)
-// - Add bot token scopes: chat:write, im:history, im:read
+// - Subscribe to bot events "message.im" (DMs) and "app_mention" (channel @-mentions)
+// - Add bot token scopes: chat:write, im:history, im:read, app_mentions:read
 // - Install the app to the workspace, copy the Bot User OAuth Token into
 //   SLACK_BOT_TOKEN, and the Signing Secret into SLACK_SIGNING_SECRET.
 
@@ -22,6 +22,24 @@ const SLACK_BOT_TOKEN = process.env.SLACK_BOT_TOKEN;
 // Reject requests whose timestamp is further than this from now - protects
 // against a captured request being replayed later.
 const MAX_TIMESTAMP_SKEW_SECONDS = 5 * 60;
+
+// Slack's own event_id (unique per event, stable across retries) - tracked
+// here so a retry, or a hypothetical future overlap between message.im and
+// app_mention firing for the same underlying message, can't produce two
+// replies. Just needs to cover the retry/duplicate window, not be a durable
+// store, so a small bounded set is enough.
+const recentEventIds = new Set();
+const MAX_RECENT_EVENT_IDS = 500;
+
+function alreadyProcessed(eventId) {
+  if (!eventId) return false;
+  if (recentEventIds.has(eventId)) return true;
+  recentEventIds.add(eventId);
+  if (recentEventIds.size > MAX_RECENT_EVENT_IDS) {
+    recentEventIds.delete(recentEventIds.values().next().value);
+  }
+  return false;
+}
 
 /**
  * Verifies the `X-Slack-Signature` header per Slack's signing secret scheme.
@@ -57,15 +75,21 @@ function verifySlackSignature(req) {
 }
 
 /**
- * Posts a plain-text message to a Slack conversation (DM channel ID from
- * the event payload). Slack's Web API always returns HTTP 200, even on
- * failure — success/failure is signaled via `ok` in the JSON body, not the
- * status code, so that has to be checked explicitly.
+ * Posts a plain-text message to a Slack conversation (channel ID from the
+ * event payload - a DM channel or a regular channel). Pass threadTs to
+ * reply inside a thread (used for channel mentions) instead of posting a
+ * new top-level message; omit it for a plain DM reply. Slack's Web API
+ * always returns HTTP 200, even on failure — success/failure is signaled
+ * via `ok` in the JSON body, not the status code, so that has to be
+ * checked explicitly.
  */
-async function postSlackMessage(channel, text) {
+async function postSlackMessage(channel, text, threadTs) {
+  const body = { channel, text };
+  if (threadTs) body.thread_ts = threadTs;
+
   const res = await axios.post(
     "https://slack.com/api/chat.postMessage",
-    { channel, text },
+    body,
     {
       headers: {
         Authorization: `Bearer ${SLACK_BOT_TOKEN}`,
@@ -81,10 +105,9 @@ async function postSlackMessage(channel, text) {
 
 /**
  * Express handler for POST /slack/events. Handles the one-time URL
- * verification handshake, then DM message events: resolves the sender's
- * identity, calls the shared core handler, and replies via chat.postMessage.
- * Channel mentions (non-DM) are intentionally ignored for now - see
- * event.channel_type check below.
+ * verification handshake, then two event types - DM messages (message.im)
+ * and channel @-mentions (app_mention) - both funneled through the same
+ * identity resolution, core handler call, and chat.postMessage reply.
  */
 export async function handleSlackEvent(req, res) {
   if (!verifySlackSignature(req)) {
@@ -113,24 +136,55 @@ export async function handleSlackEvent(req, res) {
     return;
   }
 
+  // Belt-and-suspenders dedup on Slack's own event_id, in case a retry
+  // arrives without the header above, or message.im and app_mention ever
+  // both fired for the same underlying message.
+  if (alreadyProcessed(body.event_id)) {
+    return;
+  }
+
   try {
     const event = body.event;
+    if (!event) return;
+
+    let text;
+    let replyChannel;
+    let threadTs; // undefined = reply as a new top-level message (DMs); set for mentions
 
     if (
-      !event ||
-      event.type !== "message" ||
-      event.channel_type !== "im" || // DMs only for now - channel mentions come later
-      event.bot_id || // ignore the bot's own messages / other bots
-      event.subtype || // ignore edits, deletes, joins, etc. - only plain new messages
-      !event.text
+      event.type === "message" &&
+      event.channel_type === "im" &&
+      !event.bot_id && // ignore the bot's own messages / other bots
+      !event.subtype && // ignore edits, deletes, joins, etc. - only plain new messages
+      event.text
     ) {
+      text = event.text;
+      replyChannel = event.channel;
+      // DM replies stay inline, not threaded.
+    } else if (
+      event.type === "app_mention" &&
+      !event.bot_id &&
+      !event.subtype &&
+      event.text
+    ) {
+      // Strip the leading <@BOTID> mention Slack includes in the text
+      // (there can technically be more than one leading mention) before
+      // handing it to the core handler as a plain question.
+      text = event.text.replace(/^(<@[^>]+>\s*)+/, "").trim();
+      replyChannel = event.channel;
+      // Reply in the existing thread if this mention was already part of
+      // one, otherwise start a new thread from this message - never as a
+      // new top-level channel message.
+      threadTs = event.thread_ts || event.ts;
+    } else {
       return;
     }
 
-    const slackUserId = event.user;
-    const text = event.text;
+    if (!text) return; // e.g. a bare mention with nothing else in it
 
-    console.log(`Incoming Slack DM from ${slackUserId}: ${text}`);
+    const slackUserId = event.user;
+
+    console.log(`Incoming Slack ${event.type === "app_mention" ? "mention" : "DM"} from ${slackUserId}: ${text}`);
 
     const identity = getIdentityForSlackUser(slackUserId);
     logExchange({
@@ -143,7 +197,7 @@ export async function handleSlackEvent(req, res) {
 
     const reply = await handleIncomingMessage({ userId: slackUserId, identity, text, channel: "slack" });
 
-    await postSlackMessage(event.channel, reply);
+    await postSlackMessage(replyChannel, reply, threadTs);
 
     logExchange({
       phone: slackUserId,
