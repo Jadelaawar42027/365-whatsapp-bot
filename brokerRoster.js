@@ -1,5 +1,10 @@
 // Maps a sender's WhatsApp phone number (as GHL/Meta send it - digits only,
 // no "+", e.g. "34645496611") to their identity for permission purposes.
+// Each entry can ALSO carry an optional "slack" field (that person's Slack
+// user ID, e.g. "U0123ABC456" - find it via their Slack profile "Copy
+// member ID") so the same identity is reachable from either channel. The
+// WhatsApp phone number is still each entry's object key/primary identity;
+// "slack" is just an extra lookup field on top of the same { name, role }.
 //
 // role: 'leadership' -> full access to all contacts/deals/broker data.
 //       'broker'     -> restricted to only their own assigned contacts/deals.
@@ -31,7 +36,7 @@ export const BROKER_ROSTER = {
   '17542074504': { name: 'Cheryl Hazel', role: 'broker' },
 
   // --- Setters: outbound qualification/booking, own separate knowledge base ---
-  '48697713899': { name: 'Karim El Timani', role: 'setter' },
+  '48697713899': { name: 'Karim El Timani', role: 'setter', slack: 'U05HD0984TU' },
 };
 
 /**
@@ -40,6 +45,19 @@ export const BROKER_ROSTER = {
  */
 export function getIdentityForPhone(phone) {
   return BROKER_ROSTER[phone] || null;
+}
+
+/**
+ * Looks up the identity for a given Slack user ID (e.g. "U0123ABC456").
+ * Mirrors getIdentityForPhone, but scans entries' "slack" field since the
+ * roster is keyed by WhatsApp phone number, not Slack ID. Returns null if
+ * no entry has a matching "slack" field (unregistered on Slack).
+ */
+export function getIdentityForSlackUser(slackUserId) {
+  const match = Object.entries(BROKER_ROSTER).find(([, identity]) => identity.slack === slackUserId);
+  if (!match) return null;
+  const [phone, identity] = match;
+  return { phone, ...identity };
 }
 
 /**

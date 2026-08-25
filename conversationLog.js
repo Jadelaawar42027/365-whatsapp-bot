@@ -8,9 +8,9 @@ const LOG_URL = process.env.CONVERSATION_LOG_URL;
 
 /**
  * @param {object} entry
- * @param {string} entry.phone - sender's phone number
+ * @param {string} entry.phone - sender's phone number (WhatsApp) or Slack user ID (Slack) - same field, whichever channel this came from
  * @param {string} entry.name - resolved name if known, else "Unknown"
- * @param {string} entry.role - 'leadership' | 'broker' | 'unregistered'
+ * @param {string} entry.role - 'leadership' | 'broker' | 'setter' | 'unregistered'
  * @param {'incoming'|'outgoing'} entry.direction
  * @param {string} entry.message - the message text
  */

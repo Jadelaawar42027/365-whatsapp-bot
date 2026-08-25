@@ -1,11 +1,11 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { getSystemPrompt } from "./knowledgeBase.js";
-import { getIdentityForPhone } from "./brokerRoster.js";
 import { mintIdentityToken } from "./identity.js";
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
-// In-memory conversation history, keyed by phone number.
+// In-memory conversation history, keyed by conversationKey (a phone number
+// for WhatsApp, a Slack user ID for Slack - any unique per-sender string).
 // This resets if the server restarts — fine for now. Production deployment
 // should move this to a real store (Postgres, Redis, or a GHL custom object)
 // so history survives restarts and can be inspected/audited.
@@ -13,31 +13,37 @@ const conversations = new Map();
 
 const MAX_TURNS_KEPT = 20; // trim history so context doesn't grow unbounded
 
-function getHistory(phone) {
-  if (!conversations.has(phone)) conversations.set(phone, []);
-  return conversations.get(phone);
+function getHistory(conversationKey) {
+  if (!conversations.has(conversationKey)) conversations.set(conversationKey, []);
+  return conversations.get(conversationKey);
 }
 
 /**
  * Sends the user's message to Claude along with their conversation history,
- * appends the exchange to history, and returns Claude's reply text.
+ * appends the exchange to history, and returns Claude's reply text. This is
+ * the shared engine behind every channel - it doesn't know or care whether
+ * conversationKey is a WhatsApp phone number or a Slack user ID.
  *
- * Identity/permissions (Phase 4): the sender's phone number is resolved
- * against the broker roster. Registered senders get a signed identity token
- * minted for this request, which the GHL MCP server verifies and uses to
- * scope what data comes back (leadership = everything, broker = only their
- * own contacts/deals). Unregistered senders get no GHL tool access at all —
- * the bot still replies, but can't touch CRM data for them.
+ * Identity/permissions (Phase 4): identity is resolved by the CALLER
+ * (each channel has its own directory of who's who - see getIdentityForPhone
+ * in brokerRoster.js for WhatsApp, getIdentityForSlackUser for Slack) and
+ * passed in already-resolved. Registered identities get a signed identity
+ * token minted for this request, which the GHL MCP server verifies and uses
+ * to scope what data comes back (leadership/setter = broad read access,
+ * broker = only their own contacts/deals - see access.js in the GHL MCP
+ * server repo). Unregistered senders (identity is null/undefined) get no
+ * GHL tool access at all - the bot still replies, but can't touch CRM data
+ * for them.
  *
- * @param {string} phone - sender's phone number, used as the conversation key
- * @param {string} userMessage - the incoming WhatsApp message text
+ * @param {string} conversationKey - unique per-channel sender identifier (phone number, Slack user ID), used as the conversation history key
+ * @param {string} userMessage - the incoming message text
+ * @param {{name: string, role: string}|null|undefined} identity - resolved identity for this sender, or null/undefined if unregistered
  */
-export async function askClaude(phone, userMessage) {
-  const history = getHistory(phone);
+export async function askClaude(conversationKey, userMessage, identity) {
+  const history = getHistory(conversationKey);
 
   history.push({ role: "user", content: userMessage });
 
-  const identity = getIdentityForPhone(phone);
   const baseSystemPrompt = await getSystemPrompt(identity?.role || "broker");
 
   // CRITICAL: Claude has no built-in awareness of the current date/time -
@@ -139,7 +145,7 @@ current date from anything else.`;
   // send whatever real content exists (clearly marked as cut off), or a
   // plain "hit a limit" message if there's nothing usable yet.
   if (response.stop_reason === "max_tokens") {
-    console.warn(`Reply to ${phone} hit the max_tokens cap (stop_reason: max_tokens).`);
+    console.warn(`Reply to ${conversationKey} hit the max_tokens cap (stop_reason: max_tokens).`);
 
     if (replyText) {
       replyText += "\n\n_(Cut off — hit a response length limit. Ask me to continue if you need the rest.)_";
@@ -157,4 +163,21 @@ current date from anything else.`;
   }
 
   return replyText;
+}
+
+/**
+ * Transport-agnostic entry point for live chat. Every channel adapter
+ * (WhatsApp's webhook handler in server.js, slack.js) normalizes its own
+ * incoming payload into this shape and calls this instead of touching
+ * askClaude/Claude/MCP logic directly, so channel-specific code stays a
+ * thin transport layer with zero duplication of the actual assistant logic.
+ * @param {object} message
+ * @param {string} message.userId - unique per-channel sender identifier (phone number, Slack user ID) - used as the conversation history key
+ * @param {{name: string, role: string}|null|undefined} message.identity - resolved identity for this sender, or null/undefined if unregistered
+ * @param {string} message.text - the incoming message text
+ * @param {'whatsapp'|'slack'} message.channel - which channel this came in on (not currently used to vary behavior, but kept in the shape for when it needs to)
+ * @returns {Promise<string>} reply text
+ */
+export async function handleIncomingMessage({ userId, identity, text, channel }) {
+  return askClaude(userId, text, identity);
 }

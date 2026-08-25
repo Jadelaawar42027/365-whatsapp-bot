@@ -1,7 +1,8 @@
 import "dotenv/config";
 import express from "express";
 import { sendWhatsAppMessage, sendTypingIndicator, sendTemplateMessage } from "./whatsapp.js";
-import { askClaude } from "./claude.js";
+import { handleIncomingMessage } from "./claude.js";
+import { handleSlackEvent } from "./slack.js";
 import { logExchange } from "./conversationLog.js";
 import { getIdentityForPhone, getIdentityByName, getLeadershipEntries, BROKER_ROSTER } from "./brokerRoster.js";
 import { generateMorningDigest } from "./digest.js";
@@ -13,7 +14,12 @@ import { generateBrokerPerformanceReview } from "./brokerPerformanceReview.js";
 import { transcribeWhatsAppVoiceNote } from "./voiceTranscription.js";
 
 const app = express();
-app.use(express.json());
+// verify captures the exact raw request bytes onto req.rawBody, alongside
+// the normal parsed req.body - needed for Slack's HMAC signature
+// verification (see slack.js), which requires the raw bytes Slack actually
+// signed rather than a re-serialized parsed body. Unused by every other
+// route, so this is harmless everywhere else.
+app.use(express.json({ verify: (req, res, buf) => { req.rawBody = buf; } }));
 
 // ---------------------------------------------------------------------------
 // 1) Webhook verification — Meta calls this ONCE when you register the
@@ -118,7 +124,7 @@ app.post("/webhook", async (req, res) => {
       message: text,
     });
 
-    const reply = await askClaude(from, text);
+    const reply = await handleIncomingMessage({ userId: from, identity, text, channel: "whatsapp" });
     replied = true;
     clearTimeout(fallbackTimer);
     await sendWhatsAppMessage(from, reply);
@@ -134,6 +140,14 @@ app.post("/webhook", async (req, res) => {
     console.error("Error handling incoming webhook:", err);
   }
 });
+
+// ---------------------------------------------------------------------------
+// 2b) Slack — second input/output channel, reusing the same
+//    handleIncomingMessage core as WhatsApp above. All Slack-specific
+//    logic (signature verification, Events API payload shape, DM filtering,
+//    posting the reply) lives in slack.js; this route just wires it in.
+// ---------------------------------------------------------------------------
+app.post("/slack/events", handleSlackEvent);
 
 app.get("/", (req, res) => {
   res.send("365 Yachts WhatsApp bot is running.");
