@@ -114,14 +114,21 @@ current date from anything else.`;
   // IMPORTANT: per-user content (name/role) must stay OUT of the cached
   // block - caching requires byte-for-byte identical content, so anything
   // that varies per person goes in a separate, small, uncached block after it.
+
+  // Everyone else gets a moderate, controlled budget covering the whole
+  // agentic turn (tool calls + narration + final reply), not just the
+  // visible answer - see digest.js for the fuller explanation of why a
+  // tight cap can otherwise cut a reply off mid-generation on complex
+  // questions. Leadership gets claude-sonnet-4-6's actual max output
+  // (128K) instead - as close to "no limit" as the API allows - since an
+  // admin firing a large batch of GHL updates in one turn can burn through
+  // the standard budget well before finishing. 128K max_tokens requires
+  // streaming rather than a plain create() call, to avoid the SDK's HTTP
+  // timeout on very large non-streaming responses.
+  const isAdmin = identity?.role === "leadership";
   const requestBody = {
     model: "claude-sonnet-4-6",
-    // A moderate, controlled budget covering the whole agentic turn (tool
-    // calls + narration + final reply), not just the visible answer. Rather
-    // than raising this indefinitely, truncation is handled explicitly
-    // below - see digest.js for the fuller explanation of why a tight cap
-    // can otherwise cut a reply off mid-generation on complex questions.
-    max_tokens: 2000,
+    max_tokens: isAdmin ? 128000 : 2000,
     system: [
       { type: "text", text: baseSystemPrompt, cache_control: { type: "ephemeral" } },
       { type: "text", text: userContext },
@@ -130,10 +137,11 @@ current date from anything else.`;
   };
   if (mcpServers) requestBody.mcp_servers = mcpServers;
 
-  const response = await anthropic.messages.create(
-    requestBody,
-    { headers: { "anthropic-beta": "mcp-client-2025-04-04" } }
-  );
+  const requestOptions = { headers: { "anthropic-beta": "mcp-client-2025-04-04" } };
+
+  const response = isAdmin
+    ? await anthropic.messages.stream(requestBody, requestOptions).finalMessage()
+    : await anthropic.messages.create(requestBody, requestOptions);
 
   let replyText = response.content
     .filter((block) => block.type === "text")
