@@ -42,6 +42,11 @@ function getHistory(conversationKey) {
 export async function askClaude(conversationKey, userMessage, identity) {
   const history = getHistory(conversationKey);
 
+  // Leadership gets a much larger max_tokens budget below (for large batch
+  // turns) - a turn that big can run long enough to outlast the identity
+  // token's default 5-minute expiry, so it also needs a longer-lived token.
+  const isAdmin = identity?.role === "leadership";
+
   history.push({ role: "user", content: userMessage });
 
   const baseSystemPrompt = await getSystemPrompt(identity?.role || "broker");
@@ -96,7 +101,7 @@ current date from anything else.`;
         type: "url",
         url: process.env.GHL_MCP_URL,
         name: "ghl-coaching-mcp",
-        authorization_token: mintIdentityToken(identity),
+        authorization_token: mintIdentityToken(identity, isAdmin ? 20 : 5),
       },
     ];
   } else {
@@ -125,7 +130,6 @@ current date from anything else.`;
   // the standard budget well before finishing. 128K max_tokens requires
   // streaming rather than a plain create() call, to avoid the SDK's HTTP
   // timeout on very large non-streaming responses.
-  const isAdmin = identity?.role === "leadership";
   const requestBody = {
     model: "claude-sonnet-4-6",
     max_tokens: isAdmin ? 128000 : 2000,

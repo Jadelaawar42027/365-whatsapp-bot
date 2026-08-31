@@ -79,7 +79,7 @@ him today to lock in a time."`;
  * Core Claude call shared by both report modes below. Not exported -
  * callers use runInternalReport or runInternalReportWithFlags.
  */
-async function callForReport(identity, instructions, maxTokens = 4000) {
+async function callForReport(identity, instructions, maxTokens = 4000, tokenTtlMinutes = 5) {
   const baseSystemPrompt = await getSystemPrompt();
   const staticBlock = `${baseSystemPrompt}\n\n---\n\n${REPORT_FORMAT_RULES}\n\n${instructions}`;
 
@@ -122,7 +122,14 @@ current date from anything else.`;
           type: "url",
           url: process.env.GHL_MCP_URL,
           name: "ghl-coaching-mcp",
-          authorization_token: mintIdentityToken(identity),
+          // The GHL MCP server runs stateless, re-verifying this SAME token
+          // on every individual tool call within the turn (not once per
+          // turn) - a report covering more ground (higher maxTokens, more
+          // tool calls, real network latency) can outlast the default
+          // 5-minute expiry, so callers with a bigger maxTokens should pass
+          // a matching tokenTtlMinutes or later tool calls get silently
+          // rejected with "invalid or expired token" mid-report.
+          authorization_token: mintIdentityToken(identity, tokenTtlMinutes),
         },
       ],
     },
@@ -168,9 +175,10 @@ function applyTruncationFallback(finalText, response, identity, reportLabel) {
  *   covers those)
  * @param {string} reportLabel - used only in log messages, e.g. "morning digest"
  * @param {number} [maxTokens] - output token budget for this report's completion call, defaults to 4000
+ * @param {number} [tokenTtlMinutes] - identity token lifetime in minutes, defaults to 5 - raise alongside maxTokens for reports that can run long
  */
-export async function runInternalReport(identity, instructions, reportLabel = "report", maxTokens = 4000) {
-  const response = await callForReport(identity, instructions, maxTokens);
+export async function runInternalReport(identity, instructions, reportLabel = "report", maxTokens = 4000, tokenTtlMinutes = 5) {
+  const response = await callForReport(identity, instructions, maxTokens, tokenTtlMinutes);
 
   const allText = response.content
     .filter((block) => block.type === "text")
@@ -252,9 +260,10 @@ export async function runInternalReportWithFlags(identity, instructions, reportL
  * @param {string} instructions
  * @param {string} reportLabel - used only in log messages
  * @param {number} [maxTokens] - output token budget for this report's completion call, defaults to 4000
+ * @param {number} [tokenTtlMinutes] - identity token lifetime in minutes, defaults to 5 - raise alongside maxTokens for reports that can run long
  */
-export async function runInternalReportWithCoverage(identity, instructions, reportLabel = "report", maxTokens = 4000) {
-  const response = await callForReport(identity, instructions, maxTokens);
+export async function runInternalReportWithCoverage(identity, instructions, reportLabel = "report", maxTokens = 4000, tokenTtlMinutes = 5) {
+  const response = await callForReport(identity, instructions, maxTokens, tokenTtlMinutes);
 
   const allText = response.content
     .filter((block) => block.type === "text")

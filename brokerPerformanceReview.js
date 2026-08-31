@@ -64,9 +64,14 @@ comments.`;
  * max_tokens budget than other reports since it loops every broker's own
  * lead set in one completion call - the standard 4000-token budget was
  * getting exhausted partway through on teams with several brokers, causing
- * brokers/leads near the end to silently drop out of the message.
+ * brokers/leads near the end to silently drop out of the message. Pairs
+ * that with a longer-lived identity token (20 min vs. the 5-min default) -
+ * the GHL MCP server re-verifies the same token on every individual tool
+ * call, and a turn covering every broker's leads can easily run past 5
+ * minutes of real tool-call latency, which was silently failing mid-report
+ * with an "invalid or expired token" error once the default expired.
  * @param {{name: string, role: string}} identity - a leadership roster entry
  */
 export async function generateBrokerPerformanceReview(identity) {
-  return runInternalReportWithCoverage(identity, BROKER_PERFORMANCE_INSTRUCTIONS, "broker performance review", 16000);
+  return runInternalReportWithCoverage(identity, BROKER_PERFORMANCE_INSTRUCTIONS, "broker performance review", 16000, 20);
 }
