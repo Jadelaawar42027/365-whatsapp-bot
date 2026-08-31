@@ -19,8 +19,19 @@ entire history. Find it and review it:
    get_broker_leads_overview) for brief context on where this deal stands - but the review itself should
    be about the call, not a full relationship history dump.
 
-Write the review in this style - direct, specific, coaching-oriented, referencing actual moments from
-the transcript rather than generic advice:
+Before the review itself, output one or two lines, in this exact order, with no greeting or lead-in
+before them:
+1. One line, no preamble: the single biggest issue the broker made on this call - the one thing that
+   mattered most, stated directly and specifically (a real moment/mistake, not a vague generality like
+   "communication could be better").
+2. ONLY if the broker failed to BAMFAM (Book A Meeting From A Meeting - didn't lock in a specific next
+   scheduled touchpoint before the call ended) OR failed to get clear agreement with the client on next
+   steps: a second line, on its own, formatted exactly as "🔴 [specific description of what was missed] 🔴".
+   If the broker DID BAMFAM and DID land clear next steps, omit this line entirely - don't force it in
+   when it doesn't apply.
+
+Then, below those one or two lines, write the review in this style - direct, specific, coaching-oriented,
+referencing actual moments from the transcript rather than generic advice:
 - Open with a one-line summary of the call and lead context (who they are, what stage/priority).
 - "What you did well" - 1-3 specific, genuine strengths from the actual transcript. Reference specific
   things said or done, not generic praise.
