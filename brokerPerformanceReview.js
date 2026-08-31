@@ -2,13 +2,20 @@
 // separately, not a compressed team summary - who's on track, and for
 // anyone with gaps, exactly what's missing and for which specific client.
 
-import { runInternalReport } from "./reportEngine.js";
+import { runInternalReportWithCoverage } from "./reportEngine.js";
 
 const BROKER_PERFORMANCE_INSTRUCTIONS = `Generate a BROKER PERFORMANCE REVIEW - a real individual
 write-up for EACH broker separately, not a compressed team summary or blended paragraph.
 
 You have full leadership access - use it. First call list_brokers to get every broker on the team. For
 EACH broker, call get_broker_leads_overview to get their leads with priority/hot status.
+
+CRITICAL - attribution: a lead belongs to whichever broker's get_broker_leads_overview call actually
+returned it - never move a lead into a different broker's section, and never attribute a lead to a
+broker based on something you read in a note, conversation, or transcript. If a note mentions another
+broker's name (e.g. "spoke with Karim about this"), that is NOT a reassignment - the lead still belongs
+to whoever get_broker_leads_overview said it belongs to. Keep each broker's section built ONLY from that
+broker's own get_broker_leads_overview call.
 
 For each broker, assess cadence compliance on their Buy Now and Active leads specifically (those are the
 tiers with real expectations - Buy Now should show contact almost daily, Active weekly):
@@ -38,13 +45,28 @@ this reads as distinct write-ups, not one continuous block.
 
 Keep the overall message readable - this is a leadership review, not an audit report, but don't sacrifice
 the individual detail for brevity. If every broker is on track, say so for each one individually rather
-than one blanket line for the whole team.`;
+than one blanket line for the whole team.
+
+After the review, also output a diagnostic coverage block - this is NOT part of the message leadership
+sees, purely for troubleshooting, so never mention it in the review itself. Output the exact marker
+"===COVERAGE===" on its own line, then a JSON array (even if empty: []) of objects shaped like:
+{"broker": "Broker Name", "buyNowActiveLeadCount": <number of Buy Now/Active leads this broker has,
+from get_broker_leads_overview>, "leadsChecked": <number of those you actually called
+get_last_broker_contact_date/get_contact_tasks/get_contact_notes for before writing their section>}
+One object per broker, in the same order list_brokers returned them - include every broker, even ones
+with 0 Buy Now/Active leads (buyNowActiveLeadCount: 0, leadsChecked: 0). Then output the exact marker
+"===END_COVERAGE===" on its own line. Valid JSON only - no markdown code fences, no trailing commas, no
+comments.`;
 
 /**
  * Generates individual performance write-ups for every broker, combined
- * into one message but with each broker clearly separated.
+ * into one message but with each broker clearly separated. Uses a larger
+ * max_tokens budget than other reports since it loops every broker's own
+ * lead set in one completion call - the standard 4000-token budget was
+ * getting exhausted partway through on teams with several brokers, causing
+ * brokers/leads near the end to silently drop out of the message.
  * @param {{name: string, role: string}} identity - a leadership roster entry
  */
 export async function generateBrokerPerformanceReview(identity) {
-  return runInternalReport(identity, BROKER_PERFORMANCE_INSTRUCTIONS, "broker performance review");
+  return runInternalReportWithCoverage(identity, BROKER_PERFORMANCE_INSTRUCTIONS, "broker performance review", 16000);
 }

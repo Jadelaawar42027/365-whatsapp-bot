@@ -13,6 +13,8 @@ export const REPORT_MARKER = "===REPORT===";
 export const END_MARKER = "===END===";
 export const FLAGS_MARKER = "===FLAGS===";
 export const END_FLAGS_MARKER = "===END_FLAGS===";
+export const COVERAGE_MARKER = "===COVERAGE===";
+export const END_COVERAGE_MARKER = "===END_COVERAGE===";
 
 /**
  * Shared formatting/marker rules every report type must follow, appended
@@ -77,7 +79,7 @@ him today to lock in a time."`;
  * Core Claude call shared by both report modes below. Not exported -
  * callers use runInternalReport or runInternalReportWithFlags.
  */
-async function callForReport(identity, instructions) {
+async function callForReport(identity, instructions, maxTokens = 4000) {
   const baseSystemPrompt = await getSystemPrompt();
   const staticBlock = `${baseSystemPrompt}\n\n---\n\n${REPORT_FORMAT_RULES}\n\n${instructions}`;
 
@@ -106,8 +108,10 @@ current date from anything else.`;
       // A controlled budget, not an unbounded ceiling - if a run genuinely
       // needs more (e.g. several leads needing a full conversation read
       // for the "no next action" recommendations), the fallback below
-      // kicks in instead of the response just going missing.
-      max_tokens: 4000,
+      // kicks in instead of the response just going missing. Callers
+      // covering more ground in one turn (e.g. the leadership performance
+      // review, which loops every broker) pass a higher maxTokens.
+      max_tokens: maxTokens,
       system: [
         { type: "text", text: staticBlock, cache_control: { type: "ephemeral" } },
         { type: "text", text: userContext },
@@ -163,9 +167,10 @@ function applyTruncationFallback(finalText, response, identity, reportLabel) {
  *   need to repeat the marker/priority rules - REPORT_FORMAT_RULES already
  *   covers those)
  * @param {string} reportLabel - used only in log messages, e.g. "morning digest"
+ * @param {number} [maxTokens] - output token budget for this report's completion call, defaults to 4000
  */
-export async function runInternalReport(identity, instructions, reportLabel = "report") {
-  const response = await callForReport(identity, instructions);
+export async function runInternalReport(identity, instructions, reportLabel = "report", maxTokens = 4000) {
+  const response = await callForReport(identity, instructions, maxTokens);
 
   const allText = response.content
     .filter((block) => block.type === "text")
@@ -222,4 +227,59 @@ export async function runInternalReportWithFlags(identity, instructions, reportL
   }
 
   return { text: finalText, flags };
+}
+
+/**
+ * Same as runInternalReport, but ALSO extracts and logs a "coverage" JSON
+ * block - a diagnostic, not part of the returned text. This is a
+ * SELF-REPORTED number from the model (for each broker: how many Buy
+ * Now/Active leads they have vs. how many the model actually pulled
+ * cadence/task/note data for before writing that broker's section), not an
+ * independently-verified one - it's meant to be compared against the
+ * separate, code-level "fetched N contact(s) for owner X" log line the GHL
+ * MCP server writes at the actual fetch point (ghl-client.js's
+ * getBrokerLeadsOverview). A mismatch between the two - GHL says fetched
+ * more leads than the model says it checked - is the actual accuracy signal,
+ * instead of guessing from a broker complaining leads went missing.
+ *
+ * The instructions passed in must tell the model to output a JSON array
+ * between COVERAGE_MARKER and END_COVERAGE_MARKER, in addition to the
+ * normal REPORT_MARKER/END_MARKER report text. Fails safe: a missing or
+ * malformed coverage block only logs a warning, never affects the report
+ * text itself, which is the primary deliverable.
+ *
+ * @param {{name: string, role: string}} identity
+ * @param {string} instructions
+ * @param {string} reportLabel - used only in log messages
+ * @param {number} [maxTokens] - output token budget for this report's completion call, defaults to 4000
+ */
+export async function runInternalReportWithCoverage(identity, instructions, reportLabel = "report", maxTokens = 4000) {
+  const response = await callForReport(identity, instructions, maxTokens);
+
+  const allText = response.content
+    .filter((block) => block.type === "text")
+    .map((block) => block.text)
+    .join("\n");
+
+  let finalText = extractBetweenMarkers(allText, REPORT_MARKER, END_MARKER);
+  if (finalText === null) {
+    console.warn(`${reportLabel} for ${identity.name} did not include the ${REPORT_MARKER} marker - falling back to last text block.`);
+    const textBlocks = response.content.filter((block) => block.type === "text");
+    finalText = (textBlocks[textBlocks.length - 1]?.text || "").trim();
+  }
+  finalText = applyTruncationFallback(finalText, response, identity, reportLabel);
+
+  const coverageRaw = extractBetweenMarkers(allText, COVERAGE_MARKER, END_COVERAGE_MARKER);
+  if (coverageRaw) {
+    try {
+      const coverage = JSON.parse(coverageRaw);
+      console.log(`${reportLabel} for ${identity.name} - coverage (self-reported; compare against the GHL MCP server's fetched-count logs):`, JSON.stringify(coverage));
+    } catch (err) {
+      console.warn(`${reportLabel} for ${identity.name}: coverage block wasn't valid JSON, skipping. Raw: ${coverageRaw.slice(0, 200)}`);
+    }
+  } else {
+    console.warn(`${reportLabel} for ${identity.name} did not include a coverage block.`);
+  }
+
+  return finalText;
 }
