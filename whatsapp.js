@@ -87,9 +87,12 @@ export async function sendWhatsAppMessage(to, text) {
  * outside that window.
  * @param {string} to - recipient's phone number in international format, no "+" (e.g. "34612345678")
  * @param {string} templateName - the exact template name as approved in WhatsApp Manager
- * @param {string} [languageCode] - template language code, defaults to 'en_US'
+ * @param {string} [languageCode] - template language code, defaults to 'en' - must match the
+ *   language the template is actually registered under in WhatsApp Manager exactly (Meta
+ *   treats 'en' and 'en_US' as distinct - sending the wrong one fails with error 132001,
+ *   "Template name does not exist in the translation", even if the template name is correct)
  */
-export async function sendTemplateMessage(to, templateName, languageCode = "en_US") {
+export async function sendTemplateMessage(to, templateName, languageCode = "en") {
   const url = `https://graph.facebook.com/${GRAPH_API_VERSION}/${process.env.WHATSAPP_PHONE_NUMBER_ID}/messages`;
 
   try {
