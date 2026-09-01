@@ -297,17 +297,28 @@ app.post("/trigger/eod-checkin", (req, res) => {
   runBatchReport(generateEODCheckin, "EOD check-in");
 });
 
+// TEMP: swapped from "good_morning" (en) to Meta's default "hello_world"
+// sample template (confirmed live: language "en_US", no {{1}} variables in
+// any component) while the new "starter" template is pending approval.
+// Switch DAILY_TEMPLATE_NAME/DAILY_TEMPLATE_LANGUAGE back once starter (or
+// whichever template replaces it) is approved - both the real send and the
+// leadership-only test below read from these two constants, so there's
+// only one place to update.
+const DAILY_TEMPLATE_NAME = "hello_world";
+const DAILY_TEMPLATE_LANGUAGE = "en_US";
+
 /**
- * Sends the approved "good_morning" WhatsApp template to every roster
- * entry (brokers and leadership alike) to reopen each person's 24-hour
- * messaging window before regular free-form reports need to go out.
+ * Sends the approved WhatsApp template (see DAILY_TEMPLATE_NAME above) to
+ * every roster entry (brokers and leadership alike) to reopen each
+ * person's 24-hour messaging window before regular free-form reports need
+ * to go out.
  */
 async function runDailyTemplateSequence() {
   const roster = Object.entries(BROKER_ROSTER).map(([phone, identity]) => ({ phone, ...identity }));
 
   for (const person of roster) {
     try {
-      await sendTemplateMessage(person.phone, "good_morning");
+      await sendTemplateMessage(person.phone, DAILY_TEMPLATE_NAME, DAILY_TEMPLATE_LANGUAGE);
       logExchange({
         phone: person.phone,
         name: person.name,
@@ -323,6 +334,37 @@ async function runDailyTemplateSequence() {
   }
   console.log("Daily template run complete.");
 }
+
+/**
+ * Test variant of the daily template send - leadership only, so a template
+ * swap (like this one) can be verified against a couple of real recipients
+ * before firing it at the whole roster.
+ */
+app.post("/trigger/daily-template-test", (req, res) => {
+  if (!requireTriggerAuth(req, res)) return;
+  const leadership = getLeadershipEntries();
+  res.status(202).json({ status: "accepted", recipients: leadership.length });
+
+  (async () => {
+    for (const person of leadership) {
+      try {
+        await sendTemplateMessage(person.phone, DAILY_TEMPLATE_NAME, DAILY_TEMPLATE_LANGUAGE);
+        logExchange({
+          phone: person.phone,
+          name: person.name,
+          role: person.role,
+          direction: "outgoing",
+          message: "[DAILY TEMPLATE TEST] Window reopen message sent",
+        });
+        console.log(`Daily template test sent to ${person.name}.`);
+      } catch (err) {
+        console.error(`Failed to send daily template test to ${person.name}:`, err.message);
+      }
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+    }
+    console.log("Daily template test run complete.");
+  })();
+});
 
 app.post("/trigger/daily-template", (req, res) => {
   if (!requireTriggerAuth(req, res)) return;
