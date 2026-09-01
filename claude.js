@@ -93,17 +93,49 @@ current date from anything else.`;
         "BASE section above rather than assuming broker playbook context applies."
       : "";
 
+    // Business consultant capability - leadership only. get_broker_metrics/
+    // get_setter_metrics/get_overview_metrics/get_partner_metrics/get_ad_spend come
+    // from the yachts-analytics-mcp server, wired in below alongside GHL. This is
+    // ad-hoc only (no scheduled report) - leadership just asks whenever they want.
+    const consultantNote = isAdmin
+      ? " You also have business analytics tools (get_broker_metrics, get_setter_metrics, " +
+        "get_overview_metrics, get_partner_metrics, get_ad_spend), each for an arbitrary date range. " +
+        "When leadership asks an analytical or strategic question (e.g. \"look at setter numbers for " +
+        "the last 6 months and find patterns, factor in ad spend\"), act as a business/sales " +
+        "performance consultant, not just a data lookup: pull whatever combination of tools the " +
+        "question needs (calling a segment tool across multiple date ranges to see a trend, and " +
+        "get_ad_spend alongside it to actually correlate spend against performance yourself - these " +
+        "tools return raw data, not a pre-computed correlation), name concrete patterns you actually " +
+        "see in the numbers rather than just reciting them back, and close with a specific, actionable " +
+        "recommendation (a training focus, a budget shift, a process change) - not just an observation " +
+        "with no next step."
+      : "";
+
     userContext = `${dateContext}\n\nCURRENT USER: ${identity.name}, role: ${identity.role}. ` +
-      accessDescription + setterNote;
+      accessDescription + setterNote + consultantNote;
+
+    // Same identity token works for every MCP server here - each verifies it
+    // independently against the shared JWT_SECRET, so there's no need to mint a
+    // separate token per server.
+    const identityToken = mintIdentityToken(identity, isAdmin ? 20 : 5);
 
     mcpServers = [
       {
         type: "url",
         url: process.env.GHL_MCP_URL,
         name: "ghl-coaching-mcp",
-        authorization_token: mintIdentityToken(identity, isAdmin ? 20 : 5),
+        authorization_token: identityToken,
       },
     ];
+
+    if (isAdmin && process.env.YACHTS_ANALYTICS_MCP_URL) {
+      mcpServers.push({
+        type: "url",
+        url: process.env.YACHTS_ANALYTICS_MCP_URL,
+        name: "yachts-analytics-mcp",
+        authorization_token: identityToken,
+      });
+    }
   } else {
     userContext = `${dateContext}\n\nCURRENT USER: not on the broker roster. You have NO access to GHL/CRM ` +
       `tools for this conversation. If asked about leads, deals, or CRM data, explain that this number ` +
