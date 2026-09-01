@@ -297,15 +297,14 @@ app.post("/trigger/eod-checkin", (req, res) => {
   runBatchReport(generateEODCheckin, "EOD check-in");
 });
 
-// TEMP: swapped from "good_morning" (en) to Meta's default "hello_world"
-// sample template (confirmed live: language "en_US", no {{1}} variables in
-// any component) while the new "starter" template is pending approval.
-// Switch DAILY_TEMPLATE_NAME/DAILY_TEMPLATE_LANGUAGE back once starter (or
-// whichever template replaces it) is approved - both the real send and the
-// leadership-only test below read from these two constants, so there's
-// only one place to update.
-const DAILY_TEMPLATE_NAME = "hello_world";
-const DAILY_TEMPLATE_LANGUAGE = "en_US";
+// "starter" replaced "good_morning" as the daily window-reopen template -
+// confirmed live via GET /{waba-id}/message_templates: language "en" (not
+// "en_US"), single BODY component with no {{1}} variables, so no
+// `components` array is needed in the send payload. Both the real send and
+// the leadership-only test below read from these two constants, so there's
+// only one place to update if the template changes again.
+const DAILY_TEMPLATE_NAME = "starter";
+const DAILY_TEMPLATE_LANGUAGE = "en";
 
 /**
  * Sends the approved WhatsApp template (see DAILY_TEMPLATE_NAME above) to
