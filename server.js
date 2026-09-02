@@ -283,6 +283,100 @@ async function runMorningDigestSequence() {
   console.log("Morning digest run complete.");
 }
 
+/**
+ * Test variant of the digest run - generates each broker's ACTUAL digest
+ * (their real identity, their real GHL data, the real rules) so a prompt
+ * change can be verified against real data, but routes every result to
+ * leadership instead of the broker themselves, clearly labeled with whose
+ * digest it is - so testing a change never sends a broker an unsolicited
+ * "test" message. Leadership's own digest + compiled team summary are
+ * generated and sent normally at the end, same as a real run, just also
+ * labeled [TEST] for clarity.
+ */
+async function runMorningDigestTestSequence() {
+  const roster = Object.entries(BROKER_ROSTER).map(([phone, identity]) => ({ phone, ...identity }));
+  const brokers = roster.filter((p) => p.role === "broker");
+  const leadership = roster.filter((p) => p.role === "leadership");
+
+  if (leadership.length === 0) {
+    console.warn("Digest test run: no leadership entries to send test output to - aborting.");
+    return;
+  }
+
+  const collectedFlags = [];
+
+  for (const person of brokers) {
+    try {
+      console.log(`[TEST] Generating morning digest for ${person.name} (${person.phone})...`);
+      const { text, flags } = await generateMorningDigest(person);
+      const labeled = `[TEST DIGEST — ${person.name}]\n\n${text}`;
+      for (const leader of leadership) {
+        await sendWhatsAppMessage(leader.phone, labeled);
+        logExchange({
+          phone: leader.phone,
+          name: leader.name,
+          role: leader.role,
+          direction: "outgoing",
+          message: `[TEST MORNING DIGEST - ${person.name}]\n${text}`,
+        });
+      }
+      console.log(`[TEST] Digest for ${person.name} sent to leadership. Flags collected: ${flags.length}`);
+      for (const flag of flags) {
+        collectedFlags.push({ ...flag, brokerName: person.name });
+      }
+    } catch (err) {
+      console.error(`[TEST] Failed to generate digest for ${person.name}:`, err.message);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+  }
+
+  for (const person of leadership) {
+    try {
+      console.log(`[TEST] Generating morning digest for leadership ${person.name} (${person.phone})...`);
+      const { text } = await generateMorningDigest(person);
+      await sendWhatsAppMessage(person.phone, `[TEST DIGEST — ${person.name}]\n\n${text}`);
+      logExchange({
+        phone: person.phone,
+        name: person.name,
+        role: person.role,
+        direction: "outgoing",
+        message: `[TEST MORNING DIGEST]\n${text}`,
+      });
+      console.log(`[TEST] Digest sent to ${person.name}.`);
+    } catch (err) {
+      console.error(`[TEST] Failed to generate/send morning digest for ${person.name}:`, err.message);
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+
+    try {
+      const summary = formatCollectedAlerts(collectedFlags, person.name);
+      await sendWhatsAppMessage(person.phone, `[TEST TEAM SUMMARY]\n\n${summary}`);
+      logExchange({
+        phone: person.phone,
+        name: person.name,
+        role: person.role,
+        direction: "outgoing",
+        message: `[TEST TEAM SUMMARY]\n${summary}`,
+      });
+      console.log(`[TEST] Team summary sent to ${person.name}.`);
+    } catch (err) {
+      console.error(`[TEST] Failed to send team summary to ${person.name}:`, err.message);
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+  }
+
+  console.log("[TEST] Morning digest test run complete.");
+}
+
+app.post("/trigger/digest-test", (req, res) => {
+  if (!requireTriggerAuth(req, res)) return;
+  const leadership = getLeadershipEntries();
+  res.status(202).json({ status: "accepted", note: "test run - all output goes to leadership only", leadershipRecipients: leadership.length });
+  runMorningDigestTestSequence();
+});
+
 app.post("/trigger/digest", (req, res) => {
   if (!requireTriggerAuth(req, res)) return;
   const roster = Object.entries(BROKER_ROSTER);
