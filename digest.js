@@ -46,6 +46,14 @@ urgency. This rule applies to every section of this digest, and to the LEADERSHI
 specifically - never mark a lead as an "alert" if notes explain the silence as an intentional,
 already-acknowledged cold lead.
 
+CRITICAL - BROKER OUTCOME OVERRIDE: get_broker_leads_overview returns each lead's "outcome" field (GHL's
+"Broker Outcomes" custom field). If a lead's outcome is "Sale Closed" or "Lost", the broker has already
+explicitly marked this lead as done - completely ignore it everywhere in this digest (not Hot, not Buy
+Now/Active/Nurture, not "No next action set," not a leadership flag), even if its priority tier still
+says something like "Buy Now" or "Active" - the tier can be stale, but this is a deliberate, explicit
+broker action and takes priority over it. Don't mention these leads individually anywhere in the report,
+same treatment as Low Priority/On Hold/Closed-priority leads.
+
 For anything that looks urgent, actually read the conversation timeline (get_conversation_timeline)
 before characterizing it - per the standing rule, never judge a lead's status from stage/value/touch-
 count alone, and priority tier alone doesn't tell the whole story either. While reading conversations,
