@@ -61,16 +61,50 @@ async function getDocText(cacheKey, docId, missingWarning) {
 }
 
 /**
+ * Fetches text for an OPTIONAL additional doc - unlike getDocText, a missing
+ * docId or an unrecoverable fetch failure returns null ("contributes
+ * nothing") rather than FALLBACK_KNOWLEDGE. This is for a second knowledge
+ * base doc meant to be combined WITH the primary one, not to replace or
+ * stand in for it - if it isn't configured yet, the primary doc alone is
+ * still a complete, valid knowledge base on its own, so there's nothing
+ * useful a fallback placeholder would add here.
+ */
+async function getOptionalDocText(cacheKey, docId) {
+  if (!docId) return null;
+
+  const now = Date.now();
+  const cached = docCache.get(cacheKey);
+  if (cached && now - cached.cachedAt < CACHE_TTL_MS) {
+    return cached.text;
+  }
+
+  try {
+    const text = (await fetchGoogleDocText(docId)).trim();
+    docCache.set(cacheKey, { text, cachedAt: now });
+    return text;
+  } catch (err) {
+    console.error(`Knowledge base fetch failed for "${cacheKey}" doc:`, err.message);
+    return cached ? cached.text : null;
+  }
+}
+
+/**
  * Returns the current knowledge base text (SOPs, objection handling,
  * escalation rules, etc.) — the part Aj edits directly in Google Docs.
- * Used for broker and leadership roles.
+ * Used for broker and leadership roles. Combines the primary doc with an
+ * optional second doc (GOOGLE_DOC_KNOWLEDGE_ID_2) if one is configured -
+ * unchanged (primary doc only) when it isn't.
  */
 async function getKnowledgeBaseText() {
-  return getDocText(
+  const primary = await getDocText(
     "broker",
     process.env.GOOGLE_DOC_KNOWLEDGE_ID,
     "GOOGLE_DOC_KNOWLEDGE_ID not set — using fallback knowledge base."
   );
+
+  const secondary = await getOptionalDocText("broker2", process.env.GOOGLE_DOC_KNOWLEDGE_ID_2);
+
+  return secondary ? `${primary}\n\n---\n\n${secondary}` : primary;
 }
 
 /**
