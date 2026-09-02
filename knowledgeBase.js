@@ -6,9 +6,9 @@ import { CORE_RULES, FALLBACK_KNOWLEDGE } from "./systemPrompt.js";
 const CACHE_TTL_MS = 3 * 60 * 1000; // 3 minutes
 
 // Per-doc cache (keyed by logical doc, not a single global variable) so the
-// broker/leadership doc and the setter doc - which may both be fetched in
-// quick succession during a mixed-role batch run - don't evict each other.
-const docCache = new Map(); // 'broker' | 'setter' -> { text, cachedAt }
+// broker/leadership doc, the setter doc, and the master reference doc - any
+// of which may be fetched in quick succession - don't evict each other.
+const docCache = new Map(); // 'broker' | 'setter' | 'masterReference' -> { text, cachedAt }
 
 /**
  * Fetches the plain-text export of a Google Doc. The doc must be shared as
@@ -61,13 +61,10 @@ async function getDocText(cacheKey, docId, missingWarning) {
 }
 
 /**
- * Fetches text for an OPTIONAL additional doc - unlike getDocText, a missing
- * docId or an unrecoverable fetch failure returns null ("contributes
- * nothing") rather than FALLBACK_KNOWLEDGE. This is for a second knowledge
- * base doc meant to be combined WITH the primary one, not to replace or
- * stand in for it - if it isn't configured yet, the primary doc alone is
- * still a complete, valid knowledge base on its own, so there's nothing
- * useful a fallback placeholder would add here.
+ * Fetches text for an OPTIONAL doc - unlike getDocText, a missing docId or
+ * an unrecoverable fetch failure returns null rather than FALLBACK_KNOWLEDGE,
+ * so a caller can tell "not configured / fetch failed" apart from "empty doc"
+ * and decide what to do about it instead of silently getting placeholder text.
  */
 async function getOptionalDocText(cacheKey, docId) {
   if (!docId) return null;
@@ -91,20 +88,26 @@ async function getOptionalDocText(cacheKey, docId) {
 /**
  * Returns the current knowledge base text (SOPs, objection handling,
  * escalation rules, etc.) — the part Aj edits directly in Google Docs.
- * Used for broker and leadership roles. Combines the primary doc with an
- * optional second doc (GOOGLE_DOC_KNOWLEDGE_ID_2) if one is configured -
- * unchanged (primary doc only) when it isn't.
+ * Used for broker and leadership roles.
  */
 async function getKnowledgeBaseText() {
-  const primary = await getDocText(
+  return getDocText(
     "broker",
     process.env.GOOGLE_DOC_KNOWLEDGE_ID,
     "GOOGLE_DOC_KNOWLEDGE_ID not set — using fallback knowledge base."
   );
+}
 
-  const secondary = await getOptionalDocText("broker2", process.env.GOOGLE_DOC_KNOWLEDGE_ID_2);
-
-  return secondary ? `${primary}\n\n---\n\n${secondary}` : primary;
+/**
+ * Returns the Broker Master Reference doc's text (GOOGLE_DOC_KNOWLEDGE_ID_2),
+ * or null if it isn't configured or couldn't be fetched. Deliberately NOT
+ * part of getSystemPrompt/getKnowledgeBaseText - this doc is large (tens of
+ * thousands of tokens), so it's fetched on demand only when a message
+ * actually asks for it (see the trigger-phrase check in claude.js), not
+ * included in every cached system prompt.
+ */
+export async function getMasterReferenceText() {
+  return getOptionalDocText("masterReference", process.env.GOOGLE_DOC_KNOWLEDGE_ID_2);
 }
 
 /**

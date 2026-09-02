@@ -1,8 +1,13 @@
 import Anthropic from "@anthropic-ai/sdk";
-import { getSystemPrompt } from "./knowledgeBase.js";
+import { getSystemPrompt, getMasterReferenceText } from "./knowledgeBase.js";
 import { mintIdentityToken } from "./identity.js";
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+
+// Strictly on-demand trigger for the (large) Broker Master Reference doc -
+// only fetched and injected when a message actually asks for it, not
+// included in every system prompt. See the injection point below for why.
+const MASTER_DOC_TRIGGER = /master doc/i;
 
 // In-memory conversation history, keyed by conversationKey (a phone number
 // for WhatsApp, a Slack user ID for Slack - any unique per-sender string).
@@ -113,6 +118,20 @@ current date from anything else.`;
 
     userContext = `${dateContext}\n\nCURRENT USER: ${identity.name}, role: ${identity.role}. ` +
       accessDescription + setterNote + consultantNote;
+
+    // Master reference doc - tens of thousands of tokens, so it's fetched and
+    // injected for THIS TURN ONLY when the message explicitly asks for it
+    // (uncached, unlike the regular knowledge base doc), not included in
+    // every system prompt. Not offered to setters - this is broker/
+    // leadership sales/product/deal-mechanics content, same scoping as the
+    // regular knowledge base doc.
+    if (identity.role !== "setter" && MASTER_DOC_TRIGGER.test(userMessage)) {
+      const masterDoc = await getMasterReferenceText();
+      userContext += masterDoc
+        ? `\n\n---\n\nMASTER REFERENCE DOC (requested this turn - "365 Yachts Broker Master Reference"):\n\n${masterDoc}`
+        : `\n\n---\n\nThe user asked to use the master reference doc, but it isn't configured yet ` +
+          `(GOOGLE_DOC_KNOWLEDGE_ID_2 not set) - tell them plainly rather than pretending to have it.`;
+    }
 
     // Same identity token works for every MCP server here - each verifies it
     // independently against the shared JWT_SECRET, so there's no need to mint a
