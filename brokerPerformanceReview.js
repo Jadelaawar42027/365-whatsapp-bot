@@ -17,8 +17,16 @@ broker's name (e.g. "spoke with Karim about this"), that is NOT a reassignment -
 to whoever get_broker_leads_overview said it belongs to. Keep each broker's section built ONLY from that
 broker's own get_broker_leads_overview call.
 
-For each broker, assess cadence compliance on their Buy Now and Active leads specifically (those are the
-tiers with real expectations - Buy Now should show contact almost daily, Active weekly):
+CRITICAL - BROKER OUTCOME OVERRIDE: get_broker_leads_overview also returns each lead's "outcome" field
+(GHL's "Broker Outcomes" custom field). If a lead's outcome is "Sale Closed" or "Lost", the broker has
+already explicitly marked this lead as done - exclude it entirely from cadence assessment and from the
+buyNowActiveLeadCount/leadsChecked coverage counts below, even if its priority tier still says "Buy Now"
+or "Active." The tier can be stale, but this is a deliberate, explicit broker action and takes priority
+over it - never name one of these leads as a cadence gap.
+
+For each broker, assess cadence compliance on their Buy Now and Active leads specifically (excluding any
+with outcome "Sale Closed" or "Lost" per above - those are the tiers with real expectations otherwise -
+Buy Now should show contact almost daily, Active weekly):
 - Call get_last_broker_contact_date on their Buy Now/Active leads to check if contact is current for
   their tier.
 - Call get_contact_tasks to check whether each Buy Now/Active lead has an open next action.
@@ -51,7 +59,7 @@ After the review, also output a diagnostic coverage block - this is NOT part of 
 sees, purely for troubleshooting, so never mention it in the review itself. Output the exact marker
 "===COVERAGE===" on its own line, then a JSON array (even if empty: []) of objects shaped like:
 {"broker": "Broker Name", "buyNowActiveLeadCount": <number of Buy Now/Active leads this broker has,
-from get_broker_leads_overview>, "leadsChecked": <number of those you actually called
+from get_broker_leads_overview, EXCLUDING any with outcome "Sale Closed" or "Lost">, "leadsChecked": <number of those you actually called
 get_last_broker_contact_date/get_contact_tasks/get_contact_notes for before writing their section>}
 One object per broker, in the same order list_brokers returned them - include every broker, even ones
 with 0 Buy Now/Active leads (buyNowActiveLeadCount: 0, leadsChecked: 0). Then output the exact marker
