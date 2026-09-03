@@ -391,12 +391,11 @@ app.post("/trigger/eod-checkin", (req, res) => {
   runBatchReport(generateEODCheckin, "EOD check-in");
 });
 
-// "starter" replaced "good_morning" as the daily window-reopen template -
-// confirmed live via GET /{waba-id}/message_templates: language "en" (not
-// "en_US"), single BODY component with no {{1}} variables, so no
-// `components` array is needed in the send payload. Both the real send and
-// the leadership-only test below read from these two constants, so there's
-// only one place to update if the template changes again.
+// "starter" was added to the WABA that actually owns the deployed phone
+// number (1085003924210260, phone 1290223800835641) and confirmed live on
+// WhatsApp. Both the real send and the leadership-only test below read from
+// these two constants, so there's only one place to update if the template
+// changes again.
 const DAILY_TEMPLATE_NAME = "starter";
 const DAILY_TEMPLATE_LANGUAGE = "en";
 
