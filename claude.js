@@ -383,6 +383,22 @@ current date from anything else.`;
   // every future request with this turn's internal tool exchange.
   let turnMessages = [...history];
 
+  // Second cache breakpoint, on top of the system-prompt one below: the
+  // tool loop can make 2-3 separate API calls in ONE turn (get memory ->
+  // GHL lookups -> record memory), and without this, every one of those
+  // calls re-sends the entire prior conversation history at full price -
+  // only the first call's history is a cache write, every call after it
+  // within this same turn (and the next turn, if within the TTL) reads it
+  // at ~10% of that. Only the LAST pre-loop message needs the breakpoint;
+  // caching covers everything up to and including it.
+  const lastIdx = turnMessages.length - 1;
+  if (lastIdx >= 0 && typeof turnMessages[lastIdx].content === "string") {
+    turnMessages[lastIdx] = {
+      ...turnMessages[lastIdx],
+      content: [{ type: "text", text: turnMessages[lastIdx].content, cache_control: { type: "ephemeral" } }],
+    };
+  }
+
   const requestBody = {
     model: "claude-sonnet-4-6",
     max_tokens: isAdmin ? 128000 : 2000,
@@ -398,10 +414,17 @@ current date from anything else.`;
   const requestOptions = { headers: { "anthropic-beta": "mcp-client-2025-04-04" } };
 
   let response;
+  let toolRoundTrips = 0;
+  const usage = { input: 0, cacheWrite: 0, cacheRead: 0, output: 0 };
   for (let iteration = 0; iteration < MAX_TOOL_ITERATIONS; iteration++) {
     response = isAdmin
       ? await anthropic.messages.stream(requestBody, requestOptions).finalMessage()
       : await anthropic.messages.create(requestBody, requestOptions);
+
+    usage.input += response.usage?.input_tokens ?? 0;
+    usage.cacheWrite += response.usage?.cache_creation_input_tokens ?? 0;
+    usage.cacheRead += response.usage?.cache_read_input_tokens ?? 0;
+    usage.output += response.usage?.output_tokens ?? 0;
 
     if (response.stop_reason !== "tool_use") break;
 
@@ -420,7 +443,13 @@ current date from anything else.`;
     );
     turnMessages.push({ role: "user", content: toolResults });
     requestBody.messages = turnMessages;
+    toolRoundTrips++;
   }
+
+  console.log(
+    `[usage] ${conversationKey} turn: ${toolRoundTrips} tool round-trip(s), ` +
+      `input=${usage.input} cache_write=${usage.cacheWrite} cache_read=${usage.cacheRead} output=${usage.output}`
+  );
 
   let replyText = response.content
     .filter((block) => block.type === "text")
