@@ -39,7 +39,7 @@ export const BROKER_ROSTER = {
   '12394041441': { name: 'Peter Shaarda', role: 'broker' },
 
   // --- Setters: outbound qualification/booking, own separate knowledge base ---
-  '48697713899': { name: 'Karim El Timani', role: 'setter', slack: 'U05HD0984TU' },
+  '48697713899': { name: 'Karim El Timani', role: 'leadership', slack: 'U05HD0984TU' },
 };
 
 /**
