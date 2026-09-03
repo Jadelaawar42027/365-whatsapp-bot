@@ -5,6 +5,7 @@ import { getContactMemory, upsertContactMemory } from "./db/contactsMemory.js";
 import { insertInteractionLog, getRecentInteractions } from "./db/interactionLog.js";
 import { insertHotLead } from "./db/hotLeads.js";
 import { insertAiActionLog } from "./db/aiActionsLog.js";
+import { getIdentityByName } from "./brokerRoster.js";
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
@@ -47,6 +48,14 @@ const MEMORY_TOOLS = [
       type: "object",
       properties: {
         contact_id: { type: "string" },
+        assigned_broker_name: {
+          type: "string",
+          description:
+            "ONLY needed if you (the current user) are leadership: the name of the broker this GHL " +
+            "contact is assigned to (from the contact's owner/assigned-user field in GHL), so this memory " +
+            "gets recorded under the correct broker. Not needed and ignored if you are a broker or setter " +
+            "- your own contacts are recorded automatically.",
+        },
         summary: { type: "string", description: "One or two sentence summary of what this exchange covered." },
         extracted_intent: { type: "string" },
         extracted_objection_category: { type: "string" },
@@ -92,6 +101,7 @@ async function executeMemoryTool(block, caller, channel) {
     if (block.name === "record_contact_interaction") {
       const {
         contact_id: contactId,
+        assigned_broker_name: assignedBrokerName,
         summary,
         extracted_intent: extractedIntent,
         extracted_objection_category: extractedObjectionCategory,
@@ -101,7 +111,27 @@ async function executeMemoryTool(block, caller, channel) {
         hot_lead: hotLead,
       } = block.input;
 
-      await insertInteractionLog(caller, contactId, undefined, {
+      // Only matters for a leadership caller - resolveWriteBrokerId ignores
+      // this for broker/setter (their own identity is forced regardless).
+      // Leadership isn't tied to one broker's book, so there's nothing to
+      // force it to - the AI has to name whose contact this is.
+      let requestedBrokerId;
+      if (caller.role === "leadership") {
+        if (!assignedBrokerName) {
+          return JSON.stringify({
+            error: "As leadership, you must pass assigned_broker_name (the GHL contact's assigned broker) to record this.",
+          });
+        }
+        const resolved = getIdentityByName(assignedBrokerName);
+        if (!resolved) {
+          return JSON.stringify({
+            error: `Could not match "${assignedBrokerName}" to a registered broker - check the spelling against GHL's assigned-user name exactly.`,
+          });
+        }
+        requestedBrokerId = resolved.phone;
+      }
+
+      await insertInteractionLog(caller, contactId, requestedBrokerId, {
         channel: channel || "whatsapp",
         direction: "inbound",
         summary,
@@ -116,7 +146,7 @@ async function executeMemoryTool(block, caller, channel) {
         consecutiveMissedFollowups = missedFollowup ? (existing?.consecutive_missed_followups ?? 0) + 1 : 0;
       }
 
-      await upsertContactMemory(caller, contactId, undefined, {
+      await upsertContactMemory(caller, contactId, requestedBrokerId, {
         lastAiSummary: summary,
         sentimentTrend,
         lastContactedAt: new Date(),
@@ -124,14 +154,14 @@ async function executeMemoryTool(block, caller, channel) {
       });
 
       if (hotLead?.trigger_reason) {
-        await insertHotLead(caller, contactId, undefined, {
+        await insertHotLead(caller, contactId, requestedBrokerId, {
           triggerReason: hotLead.trigger_reason,
           confidence: hotLead.confidence,
           triggerSource: `${channel || "whatsapp"} interaction`,
         });
       }
 
-      await insertAiActionLog(caller, contactId, undefined, {
+      await insertAiActionLog(caller, contactId, requestedBrokerId, {
         actionType: "memory_write_back",
         reasoning: summary,
         autoExecuted: true,
@@ -397,6 +427,15 @@ current date from anything else.`;
     .map((block) => block.text)
     .join("\n")
     .trim();
+
+  // If the tool loop above ran out of iterations while Claude was still
+  // mid tool-use (stop_reason "tool_use" with no final text), there's
+  // nothing to send - WhatsApp rejects an empty text.body outright, so
+  // never let an empty replyText reach sendWhatsAppMessage.
+  if (!replyText && response.stop_reason === "tool_use") {
+    console.warn(`Reply to ${conversationKey} exhausted the tool loop (${MAX_TOOL_ITERATIONS} iterations) without final text.`);
+    replyText = "That took more back-and-forth with the CRM than expected and I didn't land on an answer — try asking again, maybe narrowed down a bit.";
+  }
 
   // Graceful degradation on truncation, same pattern as the digest engine:
   // send whatever real content exists (clearly marked as cut off), or a
