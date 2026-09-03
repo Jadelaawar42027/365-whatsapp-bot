@@ -315,10 +315,11 @@ current date from anything else.`;
       });
     }
 
-    // mcp_toolset entries pair with each mcp_servers connector above -
-    // required once `tools` carries anything else (the memory tools below).
-    tools = mcpServers.map((server) => ({ type: "mcp_toolset", mcp_server_name: server.name }));
-    if (MEMORY_ENABLED) tools.push(...MEMORY_TOOLS);
+    // NOTE: mcp_servers above does NOT need a paired `tools` entry on this
+    // API surface (that's a different, beta client surface) - adding an
+    // `mcp_toolset` type here was rejected outright with a 400 in
+    // production. `tools` below is ONLY the local memory tools.
+    if (MEMORY_ENABLED) tools = [...MEMORY_TOOLS];
   } else {
     userContext = `${dateContext}\n\nCURRENT USER: not on the broker roster. You have NO access to GHL/CRM ` +
       `tools for this conversation. If asked about leads, deals, or CRM data, explain that this number ` +
