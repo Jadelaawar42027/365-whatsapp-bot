@@ -1,8 +1,151 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { getSystemPrompt, getMasterReferenceText } from "./knowledgeBase.js";
 import { mintIdentityToken } from "./identity.js";
+import { getContactMemory, upsertContactMemory } from "./db/contactsMemory.js";
+import { insertInteractionLog, getRecentInteractions } from "./db/interactionLog.js";
+import { insertHotLead } from "./db/hotLeads.js";
+import { insertAiActionLog } from "./db/aiActionsLog.js";
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+
+// Memory layer (Postgres) is optional - degrades to "no memory tools offered"
+// rather than the bot erroring on every message if it isn't configured.
+const MEMORY_ENABLED = Boolean(process.env.AIBOT_DATABASE_URL);
+const MAX_TOOL_ITERATIONS = 6; // bounds the local tool loop below - a normal turn uses 0-2 round trips
+
+// Two local tools alongside the existing remote GHL/analytics MCP
+// connectors. Unlike those, tool_use blocks for these two DO reach our code
+// (local tools execute client-side) and must be executed and looped, unlike
+// the MCP ones which Anthropic resolves server-side before the response
+// ever reaches us.
+const MEMORY_TOOL_NAMES = new Set(["get_contact_memory", "record_contact_interaction"]);
+const MEMORY_TOOLS = [
+  {
+    name: "get_contact_memory",
+    description:
+      "Fetch this bot's own persisted memory for a specific GHL contact - prior AI summary, sentiment " +
+      "trend, consecutive missed follow-ups, and the last several logged interactions. Call this once " +
+      "you've identified which contact (by GHL contact ID, from a GHL tool lookup) the conversation " +
+      "concerns, before answering anything about their history or momentum. An empty result just means " +
+      "this contact has no memory yet (new contact) - that's normal, not an error.",
+    input_schema: {
+      type: "object",
+      properties: {
+        contact_id: { type: "string", description: "The GHL contact ID this memory concerns." },
+      },
+      required: ["contact_id"],
+    },
+  },
+  {
+    name: "record_contact_interaction",
+    description:
+      "Persist what happened this turn for a specific GHL contact. Call this once, near the end of your " +
+      "turn, only when the conversation actually concerned a specific resolved contact (by GHL contact " +
+      "ID) - skip it for generic questions with no specific contact. Never invent field values - omit an " +
+      "optional field rather than guessing.",
+    input_schema: {
+      type: "object",
+      properties: {
+        contact_id: { type: "string" },
+        summary: { type: "string", description: "One or two sentence summary of what this exchange covered." },
+        extracted_intent: { type: "string" },
+        extracted_objection_category: { type: "string" },
+        extracted_urgency: { type: "string" },
+        sentiment_trend: { type: "string", enum: ["improving", "stable", "declining"] },
+        missed_followup: {
+          type: "boolean",
+          description: "Include true/false only if this exchange revealed whether a scheduled follow-up was missed.",
+        },
+        hot_lead: {
+          type: "object",
+          description: "Include only if this contact should be flagged/re-flagged as a hot lead based on this exchange.",
+          properties: {
+            trigger_reason: { type: "string" },
+            confidence: { type: "string", enum: ["high", "medium", "low"] },
+          },
+        },
+      },
+      required: ["contact_id", "summary"],
+    },
+  },
+];
+
+/**
+ * Executes one memory-tool call. Permission enforcement happens entirely
+ * here in code via `caller` (resolved by askClaude from the sender's
+ * identity, never from anything Claude passes) - see db/scoping.js. Errors
+ * are swallowed into a generic message so a DB hiccup degrades the memory
+ * feature for this turn without taking down the whole reply.
+ */
+async function executeMemoryTool(block, caller, channel) {
+  if (!caller) return JSON.stringify({ error: "no memory access for this sender" });
+
+  try {
+    if (block.name === "get_contact_memory") {
+      const [memory, recentInteractions] = await Promise.all([
+        getContactMemory(caller, block.input.contact_id),
+        getRecentInteractions(caller, block.input.contact_id, 10),
+      ]);
+      return JSON.stringify({ memory, recentInteractions });
+    }
+
+    if (block.name === "record_contact_interaction") {
+      const {
+        contact_id: contactId,
+        summary,
+        extracted_intent: extractedIntent,
+        extracted_objection_category: extractedObjectionCategory,
+        extracted_urgency: extractedUrgency,
+        sentiment_trend: sentimentTrend,
+        missed_followup: missedFollowup,
+        hot_lead: hotLead,
+      } = block.input;
+
+      await insertInteractionLog(caller, contactId, undefined, {
+        channel: channel || "whatsapp",
+        direction: "inbound",
+        summary,
+        extractedIntent,
+        extractedObjectionCategory,
+        extractedUrgency,
+      });
+
+      let consecutiveMissedFollowups;
+      if (typeof missedFollowup === "boolean") {
+        const existing = await getContactMemory(caller, contactId);
+        consecutiveMissedFollowups = missedFollowup ? (existing?.consecutive_missed_followups ?? 0) + 1 : 0;
+      }
+
+      await upsertContactMemory(caller, contactId, undefined, {
+        lastAiSummary: summary,
+        sentimentTrend,
+        lastContactedAt: new Date(),
+        consecutiveMissedFollowups,
+      });
+
+      if (hotLead?.trigger_reason) {
+        await insertHotLead(caller, contactId, undefined, {
+          triggerReason: hotLead.trigger_reason,
+          confidence: hotLead.confidence,
+          triggerSource: `${channel || "whatsapp"} interaction`,
+        });
+      }
+
+      await insertAiActionLog(caller, contactId, undefined, {
+        actionType: "memory_write_back",
+        reasoning: summary,
+        autoExecuted: true,
+      });
+
+      return JSON.stringify({ ok: true });
+    }
+
+    return JSON.stringify({ error: `unknown tool ${block.name}` });
+  } catch (err) {
+    console.error(`Memory tool ${block.name} failed:`, err.message);
+    return JSON.stringify({ error: "memory lookup/write failed this turn - continue without it, don't retry" });
+  }
+}
 
 // Strictly on-demand trigger for the (large) Broker Master Reference doc -
 // only fetched and injected when a message actually asks for it, not
@@ -42,10 +185,18 @@ function getHistory(conversationKey) {
  *
  * @param {string} conversationKey - unique per-channel sender identifier (phone number, Slack user ID), used as the conversation history key
  * @param {string} userMessage - the incoming message text
- * @param {{name: string, role: string}|null|undefined} identity - resolved identity for this sender, or null/undefined if unregistered
+ * @param {{name: string, role: string, phone?: string}|null|undefined} identity - resolved identity for this sender, or null/undefined if unregistered
+ * @param {'whatsapp'|'slack'} [channel] - which channel this came in on, recorded on interaction_log rows
  */
-export async function askClaude(conversationKey, userMessage, identity) {
+export async function askClaude(conversationKey, userMessage, identity, channel) {
   const history = getHistory(conversationKey);
+
+  // broker_id throughout db/ is the WhatsApp roster phone number
+  // (brokerRoster.js's own primary key) - the one stable identity this
+  // codebase already has. For WhatsApp senders, conversationKey IS that
+  // phone number; getIdentityForSlackUser attaches it as identity.phone for
+  // Slack senders. Unregistered senders (identity null) get no memory access.
+  const caller = identity ? { role: identity.role, brokerId: identity.phone || conversationKey } : null;
 
   // Leadership gets a much larger max_tokens budget below (for large batch
   // turns) - a turn that big can run long enough to outlast the identity
@@ -75,6 +226,7 @@ current date from anything else.`;
 
   let userContext;
   let mcpServers;
+  let tools;
 
   if (identity) {
     const accessDescription = identity.role === "leadership"
@@ -116,8 +268,15 @@ current date from anything else.`;
         "with no next step."
       : "";
 
+    const memoryNote = MEMORY_ENABLED
+      ? " You also have get_contact_memory and record_contact_interaction tools - call get_contact_memory " +
+        "once you know which GHL contact a question concerns, before answering anything about their " +
+        "history/momentum, and call record_contact_interaction near the end of your turn for any exchange " +
+        "that concerned a specific resolved contact."
+      : "";
+
     userContext = `${dateContext}\n\nCURRENT USER: ${identity.name}, role: ${identity.role}. ` +
-      accessDescription + setterNote + consultantNote;
+      accessDescription + setterNote + consultantNote + memoryNote;
 
     // Master reference doc - tens of thousands of tokens, so it's fetched and
     // injected for THIS TURN ONLY when the message explicitly asks for it
@@ -155,6 +314,11 @@ current date from anything else.`;
         authorization_token: identityToken,
       });
     }
+
+    // mcp_toolset entries pair with each mcp_servers connector above -
+    // required once `tools` carries anything else (the memory tools below).
+    tools = mcpServers.map((server) => ({ type: "mcp_toolset", mcp_server_name: server.name }));
+    if (MEMORY_ENABLED) tools.push(...MEMORY_TOOLS);
   } else {
     userContext = `${dateContext}\n\nCURRENT USER: not on the broker roster. You have NO access to GHL/CRM ` +
       `tools for this conversation. If asked about leads, deals, or CRM data, explain that this number ` +
@@ -181,6 +345,13 @@ current date from anything else.`;
   // the standard budget well before finishing. 128K max_tokens requires
   // streaming rather than a plain create() call, to avoid the SDK's HTTP
   // timeout on very large non-streaming responses.
+  // Scratch copy for this turn's tool round-trips - NOT the persisted
+  // `history`. Only the final plain-text reply gets pushed back into
+  // `history` below, same as before the memory tools existed, so a turn
+  // that calls get_contact_memory/record_contact_interaction doesn't bloat
+  // every future request with this turn's internal tool exchange.
+  let turnMessages = [...history];
+
   const requestBody = {
     model: "claude-sonnet-4-6",
     max_tokens: isAdmin ? 128000 : 2000,
@@ -188,15 +359,37 @@ current date from anything else.`;
       { type: "text", text: baseSystemPrompt, cache_control: { type: "ephemeral" } },
       { type: "text", text: userContext },
     ],
-    messages: history,
+    messages: turnMessages,
   };
   if (mcpServers) requestBody.mcp_servers = mcpServers;
+  if (tools) requestBody.tools = tools;
 
   const requestOptions = { headers: { "anthropic-beta": "mcp-client-2025-04-04" } };
 
-  const response = isAdmin
-    ? await anthropic.messages.stream(requestBody, requestOptions).finalMessage()
-    : await anthropic.messages.create(requestBody, requestOptions);
+  let response;
+  for (let iteration = 0; iteration < MAX_TOOL_ITERATIONS; iteration++) {
+    response = isAdmin
+      ? await anthropic.messages.stream(requestBody, requestOptions).finalMessage()
+      : await anthropic.messages.create(requestBody, requestOptions);
+
+    if (response.stop_reason !== "tool_use") break;
+
+    const toolUseBlocks = response.content.filter(
+      (block) => block.type === "tool_use" && MEMORY_TOOL_NAMES.has(block.name)
+    );
+    if (toolUseBlocks.length === 0) break; // nothing here for us to execute - avoid looping forever
+
+    turnMessages = [...turnMessages, { role: "assistant", content: response.content }];
+    const toolResults = await Promise.all(
+      toolUseBlocks.map(async (block) => ({
+        type: "tool_result",
+        tool_use_id: block.id,
+        content: await executeMemoryTool(block, caller, channel),
+      }))
+    );
+    turnMessages.push({ role: "user", content: toolResults });
+    requestBody.messages = turnMessages;
+  }
 
   let replyText = response.content
     .filter((block) => block.type === "text")
@@ -242,5 +435,5 @@ current date from anything else.`;
  * @returns {Promise<string>} reply text
  */
 export async function handleIncomingMessage({ userId, identity, text, channel }) {
-  return askClaude(userId, text, identity);
+  return askClaude(userId, text, identity, channel);
 }

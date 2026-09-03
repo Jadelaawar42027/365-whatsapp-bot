@@ -12,6 +12,7 @@ import { generateNoShowFollowup } from "./noShowFollowup.js";
 import { formatCollectedAlerts } from "./leadershipDigest.js";
 import { generateBrokerPerformanceReview } from "./brokerPerformanceReview.js";
 import { transcribeWhatsAppVoiceNote } from "./voiceTranscription.js";
+import { checkDbConnection } from "./db/pool.js";
 
 const app = express();
 // verify captures the exact raw request bytes onto req.rawBody, alongside
@@ -607,4 +608,5 @@ app.post("/trigger/leadership-digest", (req, res) => {
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`Server listening on port ${PORT}`);
+  checkDbConnection(); // logs success/failure - doesn't block startup, WhatsApp/Slack don't depend on it
 });
