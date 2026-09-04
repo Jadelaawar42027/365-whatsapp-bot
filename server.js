@@ -71,6 +71,21 @@ app.post("/webhook", async (req, res) => {
           `${errorDetail?.title || "unknown error"} ` +
           `(code ${errorDetail?.code || "?"}) - ${errorDetail?.message || ""}`
         );
+
+        // 131047 = outside the 24h window (e.g. their message was processed
+        // late enough that it had already closed by the time we replied -
+        // can happen around a redeploy). Self-heal instead of leaving them
+        // stuck: re-open the window immediately so their NEXT message goes
+        // through, rather than waiting for someone to spot this in the logs.
+        // Can't recover the ONE lost reply itself - Meta's status callback
+        // doesn't carry the original message text - but this prevents the
+        // "nothing works, ever" loop that follows otherwise.
+        if (errorDetail?.code === 131047 && status.recipient_id) {
+          console.log(`Auto re-opening window for ${status.recipient_id} after a 131047 delivery failure.`);
+          sendTemplateMessage(status.recipient_id, DAILY_TEMPLATE_NAME, DAILY_TEMPLATE_LANGUAGE)
+            .then(() => markTemplateSent(status.recipient_id, DAILY_TEMPLATE_TEXT))
+            .catch((err) => console.error(`Failed to auto re-open window for ${status.recipient_id}:`, err.message));
+        }
       }
       return;
     }
