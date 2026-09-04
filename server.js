@@ -50,6 +50,12 @@ app.post("/webhook", async (req, res) => {
   // Always ACK immediately so Meta doesn't retry/timeout on you.
   res.sendStatus(200);
 
+  // Declared outside the try block so the catch handler below can always
+  // clear it - a setInterval left running after an unhandled error would
+  // otherwise ping sendTypingIndicator every 20s forever, unlike the
+  // one-shot setTimeout this replaced.
+  let typingInterval = null;
+
   try {
     const entry = req.body.entry?.[0];
     const change = entry?.changes?.[0];
@@ -102,20 +108,16 @@ app.post("/webhook", async (req, res) => {
     const from = message.from; // sender's phone number
 
     // Show the native "typing..." indicator right away - best-effort, don't
-    // block on it. If the reply takes a while (multi-tool GHL calls can),
-    // the indicator alone might expire after 25s with nothing sent yet, so
-    // a text fallback fires after FALLBACK_DELAY_MS if we're still working.
+    // block on it. WhatsApp auto-dismisses it after 25s OR the moment ANY
+    // message is sent to this person, whichever comes first - so a fallback
+    // TEXT message (the old design) always killed the animation the instant
+    // it sent, leaving a long multi-tool GHL scan with no visible progress
+    // at all afterward. Re-sending the SAME typing-indicator call instead -
+    // never a real message - refreshes it before it expires, keeping the
+    // native animation visible for as long as the reply actually takes.
     sendTypingIndicator(message.id);
-
-    const FALLBACK_DELAY_MS = 8000;
-    let replied = false;
-    const fallbackTimer = setTimeout(() => {
-      if (!replied) {
-        sendWhatsAppMessage(from, "Sure, working on your request now...").catch((err) =>
-          console.error("Failed to send fallback message (non-fatal):", err.message)
-        );
-      }
-    }, FALLBACK_DELAY_MS);
+    const TYPING_REFRESH_MS = 20000;
+    typingInterval = setInterval(() => sendTypingIndicator(message.id), TYPING_REFRESH_MS);
 
     let text;
 
@@ -129,7 +131,7 @@ app.post("/webhook", async (req, res) => {
         console.log(`Transcribed from ${from}: ${text}`);
       } catch (err) {
         console.error("Voice note transcription failed:", err.message);
-        clearTimeout(fallbackTimer);
+        clearInterval(typingInterval);
         await sendWhatsAppMessage(from, "Couldn't transcribe that voice note — try again or send it as text.");
         return;
       }
@@ -145,8 +147,7 @@ app.post("/webhook", async (req, res) => {
     });
 
     const reply = await handleIncomingMessage({ userId: from, identity, text, channel: "whatsapp" });
-    replied = true;
-    clearTimeout(fallbackTimer);
+    clearInterval(typingInterval);
     await sendWhatsAppMessage(from, reply);
 
     logExchange({
@@ -158,6 +159,7 @@ app.post("/webhook", async (req, res) => {
     });
   } catch (err) {
     console.error("Error handling incoming webhook:", err);
+    clearInterval(typingInterval);
   }
 });
 
