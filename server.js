@@ -429,8 +429,7 @@ async function runMorningDigestTestSequence() {
 
 app.post("/trigger/digest-test", (req, res) => {
   if (!requireTriggerAuth(req, res)) return;
-  const leadership = getLeadershipEntries();
-  res.status(202).json({ status: "accepted", note: "test run - all output goes to leadership only", leadershipRecipients: leadership.length });
+  res.status(202).json({ status: "accepted", note: "test run - all output goes to Aj only", leadershipRecipients: 1 });
   runMorningDigestTestSequence();
 });
 
