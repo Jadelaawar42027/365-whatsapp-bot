@@ -15,6 +15,16 @@ import { transcribeWhatsAppVoiceNote } from "./voiceTranscription.js";
 import { checkDbConnection } from "./db/pool.js";
 import { getStaleMissedFollowups } from "./db/followupEvents.js";
 
+// Auto-reopen cooldown (see the 131047 handler below): "starter" is a
+// MARKETING-category template, and Meta throttles marketing sends to an
+// unresponsive recipient (code 131049, "healthy ecosystem engagement") -
+// re-firing it on every single delivery failure is exactly the pattern that
+// trips that throttle. At most one auto-reopen attempt per recipient per
+// cooldown window; anything failing again inside that window needs an
+// actual person to look at it, not another automatic retry.
+const RECENT_AUTO_REOPEN_COOLDOWN_MS = 30 * 60 * 1000;
+const recentAutoReopens = new Map(); // phone -> timestamp of last attempt
+
 const app = express();
 // verify captures the exact raw request bytes onto req.rawBody, alongside
 // the normal parsed req.body - needed for Slack's HMAC signature
@@ -81,10 +91,22 @@ app.post("/webhook", async (req, res) => {
         // doesn't carry the original message text - but this prevents the
         // "nothing works, ever" loop that follows otherwise.
         if (errorDetail?.code === 131047 && status.recipient_id) {
-          console.log(`Auto re-opening window for ${status.recipient_id} after a 131047 delivery failure.`);
-          sendTemplateMessage(status.recipient_id, DAILY_TEMPLATE_NAME, DAILY_TEMPLATE_LANGUAGE)
-            .then(() => markTemplateSent(status.recipient_id, DAILY_TEMPLATE_TEXT))
-            .catch((err) => console.error(`Failed to auto re-open window for ${status.recipient_id}:`, err.message));
+          const now = Date.now();
+          const lastAttempt = recentAutoReopens.get(status.recipient_id);
+          if (lastAttempt && now - lastAttempt < RECENT_AUTO_REOPEN_COOLDOWN_MS) {
+            console.warn(
+              `Skipping auto re-open for ${status.recipient_id} - already tried ` +
+              `${Math.round((now - lastAttempt) / 60000)} min ago, within the cooldown. ` +
+              `Repeated failures need a person to look at this, not another automatic template send ` +
+              `(risks Meta's anti-spam throttle, code 131049).`
+            );
+          } else {
+            recentAutoReopens.set(status.recipient_id, now);
+            console.log(`Auto re-opening window for ${status.recipient_id} after a 131047 delivery failure.`);
+            sendTemplateMessage(status.recipient_id, DAILY_TEMPLATE_NAME, DAILY_TEMPLATE_LANGUAGE)
+              .then(() => markTemplateSent(status.recipient_id, DAILY_TEMPLATE_TEXT))
+              .catch((err) => console.error(`Failed to auto re-open window for ${status.recipient_id}:`, err.message));
+          }
         }
       }
       return;
