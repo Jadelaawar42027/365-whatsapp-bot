@@ -15,16 +15,6 @@ import { transcribeWhatsAppVoiceNote } from "./voiceTranscription.js";
 import { checkDbConnection } from "./db/pool.js";
 import { getStaleMissedFollowups } from "./db/followupEvents.js";
 
-// Auto-reopen cooldown (see the 131047 handler below): "starter" is a
-// MARKETING-category template, and Meta throttles marketing sends to an
-// unresponsive recipient (code 131049, "healthy ecosystem engagement") -
-// re-firing it on every single delivery failure is exactly the pattern that
-// trips that throttle. At most one auto-reopen attempt per recipient per
-// cooldown window; anything failing again inside that window needs an
-// actual person to look at it, not another automatic retry.
-const RECENT_AUTO_REOPEN_COOLDOWN_MS = 30 * 60 * 1000;
-const recentAutoReopens = new Map(); // phone -> timestamp of last attempt
-
 const app = express();
 // verify captures the exact raw request bytes onto req.rawBody, alongside
 // the normal parsed req.body - needed for Slack's HMAC signature
@@ -82,31 +72,22 @@ app.post("/webhook", async (req, res) => {
           `(code ${errorDetail?.code || "?"}) - ${errorDetail?.message || ""}`
         );
 
-        // 131047 = outside the 24h window (e.g. their message was processed
-        // late enough that it had already closed by the time we replied -
-        // can happen around a redeploy). Self-heal instead of leaving them
-        // stuck: re-open the window immediately so their NEXT message goes
-        // through, rather than waiting for someone to spot this in the logs.
-        // Can't recover the ONE lost reply itself - Meta's status callback
-        // doesn't carry the original message text - but this prevents the
-        // "nothing works, ever" loop that follows otherwise.
+        // 131047 = outside the 24h window. Deliberately NOT auto-resolved:
+        // an earlier attempt at this (auto-firing the "starter" MARKETING
+        // template on every 131047) caused a real incident - the status
+        // callback that reports this failure arrives asynchronously and
+        // isn't reliably tied to the message we most recently sent, so
+        // auto-firing on it can react to a stale/unrelated failure and,
+        // across the whole roster over time, risks Meta's anti-spam
+        // throttle (code 131049) or the number's own quality rating. A
+        // human deciding to resend the template is one command (see
+        // sendTemplateMessage in whatsapp.js) - cheap enough to not need
+        // automating, and it won't fire on a false signal.
         if (errorDetail?.code === 131047 && status.recipient_id) {
-          const now = Date.now();
-          const lastAttempt = recentAutoReopens.get(status.recipient_id);
-          if (lastAttempt && now - lastAttempt < RECENT_AUTO_REOPEN_COOLDOWN_MS) {
-            console.warn(
-              `Skipping auto re-open for ${status.recipient_id} - already tried ` +
-              `${Math.round((now - lastAttempt) / 60000)} min ago, within the cooldown. ` +
-              `Repeated failures need a person to look at this, not another automatic template send ` +
-              `(risks Meta's anti-spam throttle, code 131049).`
-            );
-          } else {
-            recentAutoReopens.set(status.recipient_id, now);
-            console.log(`Auto re-opening window for ${status.recipient_id} after a 131047 delivery failure.`);
-            sendTemplateMessage(status.recipient_id, DAILY_TEMPLATE_NAME, DAILY_TEMPLATE_LANGUAGE)
-              .then(() => markTemplateSent(status.recipient_id, DAILY_TEMPLATE_TEXT))
-              .catch((err) => console.error(`Failed to auto re-open window for ${status.recipient_id}:`, err.message));
-          }
+          console.warn(
+            `${status.recipient_id} is outside the 24h window - if they're trying to message and getting ` +
+            `no reply, resend the "starter" template to them manually to reopen it.`
+          );
         }
       }
       return;
