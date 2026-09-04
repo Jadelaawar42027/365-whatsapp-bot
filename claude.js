@@ -12,7 +12,12 @@ const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 // Memory layer (Postgres) is optional - degrades to "no memory tools offered"
 // rather than the bot erroring on every message if it isn't configured.
 const MEMORY_ENABLED = Boolean(process.env.AIBOT_DATABASE_URL);
-const MAX_TOOL_ITERATIONS = 6; // bounds the local tool loop below - a normal turn uses 0-2 round trips
+// Bounds the local tool loop below - a normal turn uses 0-2 round trips.
+// Leadership gets a much higher cap: a large batch request (e.g. "go
+// through all 23 reactivation leads") can legitimately pause_turn several
+// times over a long agentic run, same reasoning as their 128K max_tokens.
+const MAX_TOOL_ITERATIONS = 6;
+const MAX_TOOL_ITERATIONS_ADMIN = 25;
 
 // Two local tools alongside the existing remote GHL/analytics MCP
 // connectors. Unlike those, tool_use blocks for these two DO reach our code
@@ -416,7 +421,8 @@ current date from anything else.`;
   let response;
   let toolRoundTrips = 0;
   const usage = { input: 0, cacheWrite: 0, cacheRead: 0, output: 0 };
-  for (let iteration = 0; iteration < MAX_TOOL_ITERATIONS; iteration++) {
+  const maxIterations = isAdmin ? MAX_TOOL_ITERATIONS_ADMIN : MAX_TOOL_ITERATIONS;
+  for (let iteration = 0; iteration < maxIterations; iteration++) {
     response = isAdmin
       ? await anthropic.messages.stream(requestBody, requestOptions).finalMessage()
       : await anthropic.messages.create(requestBody, requestOptions);
@@ -426,12 +432,33 @@ current date from anything else.`;
     usage.cacheRead += response.usage?.cache_read_input_tokens ?? 0;
     usage.output += response.usage?.output_tokens ?? 0;
 
+    // pause_turn: a long agentic run (e.g. a big batch of GHL tool calls
+    // across many contacts) got paused, NOT finished - resuming means
+    // resending the response content back with no tool_result needed.
+    // Treating this the same as end_turn (i.e. NOT looping) is exactly what
+    // silently truncated replies mid-batch: whatever narration text existed
+    // so far got sent as if it were the finished answer.
+    if (response.stop_reason === "pause_turn") {
+      turnMessages = [...turnMessages, { role: "assistant", content: response.content }];
+      requestBody.messages = turnMessages;
+      toolRoundTrips++;
+      continue;
+    }
+
     if (response.stop_reason !== "tool_use") break;
 
     const toolUseBlocks = response.content.filter(
       (block) => block.type === "tool_use" && MEMORY_TOOL_NAMES.has(block.name)
     );
-    if (toolUseBlocks.length === 0) break; // nothing here for us to execute - avoid looping forever
+    if (toolUseBlocks.length === 0) {
+      const unhandledNames = response.content
+        .filter((block) => block.type === "tool_use")
+        .map((block) => block.name);
+      if (unhandledNames.length > 0) {
+        console.warn(`Unhandled tool_use block(s) reached askClaude's loop: ${unhandledNames.join(", ")} - stopping this turn.`);
+      }
+      break; // nothing here for us to execute - avoid looping forever
+    }
 
     turnMessages = [...turnMessages, { role: "assistant", content: response.content }];
     const toolResults = await Promise.all(
@@ -457,13 +484,20 @@ current date from anything else.`;
     .join("\n")
     .trim();
 
-  // If the tool loop above ran out of iterations while Claude was still
-  // mid tool-use (stop_reason "tool_use" with no final text), there's
-  // nothing to send - WhatsApp rejects an empty text.body outright, so
-  // never let an empty replyText reach sendWhatsAppMessage.
-  if (!replyText && response.stop_reason === "tool_use") {
-    console.warn(`Reply to ${conversationKey} exhausted the tool loop (${MAX_TOOL_ITERATIONS} iterations) without final text.`);
-    replyText = "That took more back-and-forth with the CRM than expected and I didn't land on an answer — try asking again, maybe narrowed down a bit.";
+  // The loop above can end without Claude actually being done: it ran out
+  // of MAX_TOOL_ITERATIONS mid pause_turn/tool_use, or hit an unhandled
+  // tool_use block it gave up on. Either way, whatever text exists so far
+  // is a mid-thought fragment, not a finished answer - don't silently send
+  // it as if it were one (this is what caused replies to trail off mid
+  // narration on big batch requests), and never let an empty replyText
+  // reach sendWhatsAppMessage (it rejects an empty text.body outright).
+  if (response.stop_reason === "tool_use" || response.stop_reason === "pause_turn") {
+    console.warn(
+      `Reply to ${conversationKey} ended incomplete (stop_reason: ${response.stop_reason}, ${toolRoundTrips} round-trip(s)).`
+    );
+    replyText = replyText
+      ? `${replyText}\n\n_(Got interrupted partway through a bigger lookup — say "continue" if you want the rest.)_`
+      : "That took more back-and-forth with the CRM than expected and I didn't land on an answer — try asking again, maybe narrowed down a bit.";
   }
 
   // Graceful degradation on truncation, same pattern as the digest engine:
