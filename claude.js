@@ -521,6 +521,14 @@ current date from anything else.`;
 
   let response;
   let toolRoundTrips = 0;
+  // Text can legitimately arrive in an EARLIER round, not just the final
+  // one - the memory-tool instructions literally tell the model to answer
+  // first, THEN call record_contact_interaction "near the end of your
+  // turn." When that closing tool-call round has nothing further to add
+  // (correctly - it already answered), extracting text from only the LAST
+  // response discards the real answer from the round before it. Accumulate
+  // every round's text instead, in order.
+  const textParts = [];
   const usage = { input: 0, cacheWrite: 0, cacheRead: 0, output: 0 };
   const maxIterations = isAdmin ? MAX_TOOL_ITERATIONS_ADMIN : MAX_TOOL_ITERATIONS;
   for (let iteration = 0; iteration < maxIterations; iteration++) {
@@ -532,6 +540,13 @@ current date from anything else.`;
     usage.cacheWrite += response.usage?.cache_creation_input_tokens ?? 0;
     usage.cacheRead += response.usage?.cache_read_input_tokens ?? 0;
     usage.output += response.usage?.output_tokens ?? 0;
+
+    const roundText = response.content
+      .filter((block) => block.type === "text")
+      .map((block) => block.text)
+      .join("\n")
+      .trim();
+    if (roundText) textParts.push(roundText);
 
     // pause_turn: a long agentic run (e.g. a big batch of GHL tool calls
     // across many contacts) got paused, NOT finished - resuming means
@@ -581,11 +596,7 @@ current date from anything else.`;
       `input=${usage.input} cache_write=${usage.cacheWrite} cache_read=${usage.cacheRead} output=${usage.output}`
   );
 
-  let replyText = response.content
-    .filter((block) => block.type === "text")
-    .map((block) => block.text)
-    .join("\n")
-    .trim();
+  let replyText = textParts.join("\n\n").trim();
 
   // The loop above can end without Claude actually being done: it ran out
   // of MAX_TOOL_ITERATIONS mid pause_turn/tool_use, or hit an unhandled
