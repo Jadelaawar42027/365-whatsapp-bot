@@ -10,6 +10,50 @@ import { getIdentityByName } from "./brokerRoster.js";
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
+/**
+ * Adds an ephemeral cache_control marker to the LAST content block of a
+ * message (wrapping bare string content into a block array first, since
+ * cache_control only attaches to a block, not a raw string). Exported for
+ * direct testing of the marker-moving logic without a live API call.
+ */
+export function withCacheMarker(content) {
+  const blocks = typeof content === "string" ? [{ type: "text", text: content }] : [...content];
+  const last = blocks.length - 1;
+  blocks[last] = { ...blocks[last], cache_control: { type: "ephemeral" } };
+  return blocks;
+}
+
+/**
+ * Strips a cache_control marker back off the last content block - used to
+ * move the ONE rolling marker forward each tool-loop iteration instead of
+ * accumulating a new one every time, which would blow past Anthropic's
+ * 4-breakpoint-per-request cap within a handful of iterations.
+ */
+export function withoutCacheMarker(content) {
+  if (typeof content === "string") return content;
+  const blocks = [...content];
+  const last = blocks.length - 1;
+  const { cache_control, ...rest } = blocks[last];
+  blocks[last] = rest;
+  return blocks;
+}
+
+/**
+ * Strips the rolling marker off its old position (if any) and applies it to
+ * the newest message instead - mutates `messages` in place, returns the new
+ * index to track. Keeps exactly one rolling breakpoint at a time (plus the
+ * system prompt's own = 2 total, well under the 4-per-request cap)
+ * regardless of how many loop iterations run.
+ */
+export function moveRollingMarker(messages, oldIdx, mark = withCacheMarker, unmark = withoutCacheMarker) {
+  if (oldIdx >= 0) {
+    messages[oldIdx] = { ...messages[oldIdx], content: unmark(messages[oldIdx].content) };
+  }
+  const newIdx = messages.length - 1;
+  messages[newIdx] = { ...messages[newIdx], content: mark(messages[newIdx].content) };
+  return newIdx;
+}
+
 // Memory layer (Postgres) is optional - degrades to "no memory tools offered"
 // rather than the bot erroring on every message if it isn't configured.
 const MEMORY_ENABLED = Boolean(process.env.AIBOT_DATABASE_URL);
@@ -452,11 +496,14 @@ current date from anything else.`;
   // caching covers everything up to and including it.
   const lastIdx = turnMessages.length - 1;
   if (lastIdx >= 0 && typeof turnMessages[lastIdx].content === "string") {
-    turnMessages[lastIdx] = {
-      ...turnMessages[lastIdx],
-      content: [{ type: "text", text: turnMessages[lastIdx].content, cache_control: { type: "ephemeral" } }],
-    };
+    turnMessages[lastIdx] = { ...turnMessages[lastIdx], content: withCacheMarker(turnMessages[lastIdx].content) };
   }
+  // Tracks whichever message currently carries the SECOND (rolling)
+  // breakpoint below - only ever one at a time, moved forward each tool
+  // loop iteration, so a long multi-round-trip turn (e.g. reviewing a call:
+  // find it, pull the transcript, write the review) doesn't resend
+  // everything already seen at full price on every single round trip.
+  let rollingCacheIdx = lastIdx >= 0 ? lastIdx : -1;
 
   const requestBody = {
     model: "claude-sonnet-4-6",
@@ -494,6 +541,7 @@ current date from anything else.`;
     // so far got sent as if it were the finished answer.
     if (response.stop_reason === "pause_turn") {
       turnMessages = [...turnMessages, { role: "assistant", content: response.content }];
+      rollingCacheIdx = moveRollingMarker(turnMessages, rollingCacheIdx, withCacheMarker, withoutCacheMarker);
       requestBody.messages = turnMessages;
       toolRoundTrips++;
       continue;
@@ -523,6 +571,7 @@ current date from anything else.`;
       }))
     );
     turnMessages.push({ role: "user", content: toolResults });
+    rollingCacheIdx = moveRollingMarker(turnMessages, rollingCacheIdx, withCacheMarker, withoutCacheMarker);
     requestBody.messages = turnMessages;
     toolRoundTrips++;
   }
