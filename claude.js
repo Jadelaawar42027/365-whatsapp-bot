@@ -617,6 +617,17 @@ current date from anything else.`;
     }
   }
 
+  // Last-resort guard, independent of stop_reason: the two blocks above only
+  // catch the specific cases they know about (tool_use/pause_turn/
+  // max_tokens) - a normal end_turn completion can still produce empty text
+  // (e.g. the model's last action was a tool call and it simply had nothing
+  // further to say), and WhatsApp rejects an empty text.body with a flat
+  // 400. Never let that reach sendWhatsAppMessage, whatever the cause.
+  if (!replyText) {
+    console.warn(`Reply to ${conversationKey} was empty (stop_reason: ${response.stop_reason}) - substituting a fallback instead of sending nothing.`);
+    replyText = "I didn't get a usable answer together for that — try asking again, maybe worded a little differently.";
+  }
+
   history.push({ role: "assistant", content: replyText });
 
   // Trim oldest turns if history gets long
