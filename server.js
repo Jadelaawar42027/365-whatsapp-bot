@@ -13,6 +13,7 @@ import { formatCollectedAlerts } from "./leadershipDigest.js";
 import { generateBrokerPerformanceReview } from "./brokerPerformanceReview.js";
 import { transcribeWhatsAppVoiceNote } from "./voiceTranscription.js";
 import { checkDbConnection } from "./db/pool.js";
+import { getStaleMissedFollowups } from "./db/followupEvents.js";
 
 const app = express();
 // verify captures the exact raw request bytes onto req.rawBody, alongside
@@ -206,6 +207,22 @@ async function runBatchReport(generatorFn, reportLabel) {
 }
 
 /**
+ * Formats a broker-facing note for leads whose missed-follow-up flag (see
+ * db/followupEvents.js's getStaleMissedFollowups) is still unresolved 7+
+ * days after it was first raised. Appended to the END of a person's digest
+ * text - never merged into or placed before it - so it always lands after
+ * that digest's own hot-leads-first section.
+ * @param {Array<{contactName: string|null, contactId: string, daysAgo: number}>} items
+ */
+function formatStaleFollowupNote(items) {
+  const lines = ["❗❗❗ *Still not followed up (flagged 7+ days ago)*"];
+  for (const item of items) {
+    lines.push(`- ${item.contactName || item.contactId}: flagged ${item.daysAgo} days ago, still no follow-up logged`);
+  }
+  return lines.join("\n");
+}
+
+/**
  * Morning digest run: brokers first (each digest generation also extracts
  * "leadership flags" - near-close deals, alerts - in the SAME Claude call,
  * no extra scan), THEN leadership last: their own personal digest, followed
@@ -218,22 +235,35 @@ async function runMorningDigestSequence() {
   const leadership = roster.filter((p) => p.role === "leadership");
 
   const collectedFlags = [];
+  const collectedStaleFollowups = [];
 
   for (const person of brokers) {
     try {
       console.log(`Generating morning digest for ${person.name} (${person.phone})...`);
       const { text, flags } = await generateMorningDigest(person);
-      await sendWhatsAppMessage(person.phone, text);
+
+      // Memory-layer check, AFTER the digest's own hot-leads-first report is
+      // already built - appended to the end of their text, never reordered
+      // into it, so it always lands after hot leads for this same person.
+      const staleFollowups = await getStaleMissedFollowups({ role: "broker", brokerId: person.phone });
+      const fullText = staleFollowups.length > 0
+        ? `${text}\n\n${formatStaleFollowupNote(staleFollowups)}`
+        : text;
+
+      await sendWhatsAppMessage(person.phone, fullText);
       logExchange({
         phone: person.phone,
         name: person.name,
         role: person.role,
         direction: "outgoing",
-        message: `[MORNING DIGEST]\n${text}`,
+        message: `[MORNING DIGEST]\n${fullText}`,
       });
-      console.log(`Morning digest sent to ${person.name}. Flags collected: ${flags.length}`);
+      console.log(`Morning digest sent to ${person.name}. Flags collected: ${flags.length}, stale follow-ups: ${staleFollowups.length}`);
       for (const flag of flags) {
         collectedFlags.push({ ...flag, brokerName: person.name });
+      }
+      for (const item of staleFollowups) {
+        collectedStaleFollowups.push({ ...item, brokerName: person.name });
       }
     } catch (err) {
       console.error(`Failed to generate/send morning digest for ${person.name}:`, err.message);
@@ -264,7 +294,7 @@ async function runMorningDigestSequence() {
     await new Promise((resolve) => setTimeout(resolve, 1000));
 
     try {
-      const summary = formatCollectedAlerts(collectedFlags, person.name);
+      const summary = formatCollectedAlerts(collectedFlags, person.name, collectedStaleFollowups);
       await sendWhatsAppMessage(person.phone, summary);
       logExchange({
         phone: person.phone,
@@ -305,12 +335,17 @@ async function runMorningDigestTestSequence() {
   }
 
   const collectedFlags = [];
+  const collectedStaleFollowups = [];
 
   for (const person of brokers) {
     try {
       console.log(`[TEST] Generating morning digest for ${person.name} (${person.phone})...`);
       const { text, flags } = await generateMorningDigest(person);
-      const labeled = `[TEST DIGEST — ${person.name}]\n\n${text}`;
+      const staleFollowups = await getStaleMissedFollowups({ role: "broker", brokerId: person.phone });
+      const fullText = staleFollowups.length > 0
+        ? `${text}\n\n${formatStaleFollowupNote(staleFollowups)}`
+        : text;
+      const labeled = `[TEST DIGEST — ${person.name}]\n\n${fullText}`;
       for (const leader of leadership) {
         await sendWhatsAppMessage(leader.phone, labeled);
         logExchange({
@@ -318,12 +353,15 @@ async function runMorningDigestTestSequence() {
           name: leader.name,
           role: leader.role,
           direction: "outgoing",
-          message: `[TEST MORNING DIGEST - ${person.name}]\n${text}`,
+          message: `[TEST MORNING DIGEST - ${person.name}]\n${fullText}`,
         });
       }
-      console.log(`[TEST] Digest for ${person.name} sent to leadership. Flags collected: ${flags.length}`);
+      console.log(`[TEST] Digest for ${person.name} sent to leadership. Flags collected: ${flags.length}, stale follow-ups: ${staleFollowups.length}`);
       for (const flag of flags) {
         collectedFlags.push({ ...flag, brokerName: person.name });
+      }
+      for (const item of staleFollowups) {
+        collectedStaleFollowups.push({ ...item, brokerName: person.name });
       }
     } catch (err) {
       console.error(`[TEST] Failed to generate digest for ${person.name}:`, err.message);
@@ -351,7 +389,7 @@ async function runMorningDigestTestSequence() {
     await new Promise((resolve) => setTimeout(resolve, 1000));
 
     try {
-      const summary = formatCollectedAlerts(collectedFlags, person.name);
+      const summary = formatCollectedAlerts(collectedFlags, person.name, collectedStaleFollowups);
       await sendWhatsAppMessage(person.phone, `[TEST TEAM SUMMARY]\n\n${summary}`);
       logExchange({
         phone: person.phone,

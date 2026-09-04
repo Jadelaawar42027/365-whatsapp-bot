@@ -4,6 +4,7 @@ import { mintIdentityToken } from "./identity.js";
 import { getContactMemory, upsertContactMemory } from "./db/contactsMemory.js";
 import { insertInteractionLog, getRecentInteractions } from "./db/interactionLog.js";
 import { insertHotLead } from "./db/hotLeads.js";
+import { insertFollowupEvent } from "./db/followupEvents.js";
 import { insertAiActionLog } from "./db/aiActionsLog.js";
 import { getIdentityByName } from "./brokerRoster.js";
 
@@ -53,6 +54,10 @@ const MEMORY_TOOLS = [
       type: "object",
       properties: {
         contact_id: { type: "string" },
+        lead_name: {
+          type: "string",
+          description: "The lead's name (from GHL), so this memory can be shown later without a fresh GHL lookup - include it whenever you know it.",
+        },
         assigned_broker_name: {
           type: "string",
           description:
@@ -106,6 +111,7 @@ async function executeMemoryTool(block, caller, channel) {
     if (block.name === "record_contact_interaction") {
       const {
         contact_id: contactId,
+        lead_name: leadName,
         assigned_broker_name: assignedBrokerName,
         summary,
         extracted_intent: extractedIntent,
@@ -149,9 +155,18 @@ async function executeMemoryTool(block, caller, channel) {
       if (typeof missedFollowup === "boolean") {
         const existing = await getContactMemory(caller, contactId);
         consecutiveMissedFollowups = missedFollowup ? (existing?.consecutive_missed_followups ?? 0) + 1 : 0;
+        // Timestamped trail the morning digest escalates from (see
+        // db/followupEvents.js's getStaleMissedFollowups) - "missed" now,
+        // or "completed" if this turn shows the broker actually followed up,
+        // which resolves any previously-flagged miss for this contact.
+        await insertFollowupEvent(caller, contactId, requestedBrokerId, {
+          outcome: missedFollowup ? "missed" : "completed",
+          flaggedAt: missedFollowup ? new Date() : null,
+        });
       }
 
       await upsertContactMemory(caller, contactId, requestedBrokerId, {
+        contactName: leadName,
         lastAiSummary: summary,
         sentimentTrend,
         lastContactedAt: new Date(),

@@ -51,6 +51,7 @@ export async function upsertContactMemory(caller, contactId, requestedBrokerId, 
   const existingRow = existing.rows[0];
 
   const {
+    contactName = null,
     consecutiveMissedFollowups = null,
     lastAiSummary = null,
     sentimentTrend = null,
@@ -65,10 +66,11 @@ export async function upsertContactMemory(caller, contactId, requestedBrokerId, 
 
   const { rows } = await pool.query(
     `INSERT INTO contacts_memory
-       (contact_id, broker_id, consecutive_missed_followups, last_ai_summary, sentiment_trend, last_contacted_at, confidence, stale, updated_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now())
+       (contact_id, broker_id, contact_name, consecutive_missed_followups, last_ai_summary, sentiment_trend, last_contacted_at, confidence, stale, updated_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, now())
      ON CONFLICT (contact_id) DO UPDATE SET
        broker_id = EXCLUDED.broker_id,
+       contact_name = COALESCE(EXCLUDED.contact_name, contacts_memory.contact_name),
        consecutive_missed_followups = EXCLUDED.consecutive_missed_followups,
        last_ai_summary = COALESCE(EXCLUDED.last_ai_summary, contacts_memory.last_ai_summary),
        sentiment_trend = COALESCE(EXCLUDED.sentiment_trend, contacts_memory.sentiment_trend),
@@ -77,7 +79,7 @@ export async function upsertContactMemory(caller, contactId, requestedBrokerId, 
        stale = EXCLUDED.stale,
        updated_at = now()
      RETURNING *`,
-    [contactId, brokerId, consecutiveMissedFollowupsValue, lastAiSummary, sentimentTrend, lastContactedAt, confidence, staleValue]
+    [contactId, brokerId, contactName, consecutiveMissedFollowupsValue, lastAiSummary, sentimentTrend, lastContactedAt, confidence, staleValue]
   );
   return rows[0];
 }
