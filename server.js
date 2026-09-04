@@ -339,9 +339,12 @@ async function runMorningDigestSequence() {
  * generated and sent normally at the end, same as a real run, just also
  * labeled [TEST] for clarity.
  */
-async function runMorningDigestTestSequence() {
+async function runMorningDigestTestSequence(skipPhones = []) {
   const roster = Object.entries(BROKER_ROSTER).map(([phone, identity]) => ({ phone, ...identity }));
-  const brokers = roster.filter((p) => p.role === "broker");
+  // Lets a redeploy-interrupted run resume without re-spending tokens on
+  // brokers who already got a valid digest before the interruption - pass
+  // their phone numbers in the trigger request body's "skip" array.
+  const brokers = roster.filter((p) => p.role === "broker" && !skipPhones.includes(p.phone));
   // Test runs go to Aj only, not the whole leadership group - keeps test
   // traffic (every broker's digest, relabeled [TEST]) off other leadership
   // phones while a change is being verified.
@@ -429,8 +432,9 @@ async function runMorningDigestTestSequence() {
 
 app.post("/trigger/digest-test", (req, res) => {
   if (!requireTriggerAuth(req, res)) return;
-  res.status(202).json({ status: "accepted", note: "test run - all output goes to Aj only", leadershipRecipients: 1 });
-  runMorningDigestTestSequence();
+  const skip = Array.isArray(req.body?.skip) ? req.body.skip : [];
+  res.status(202).json({ status: "accepted", note: "test run - all output goes to Aj only", leadershipRecipients: 1, skipping: skip });
+  runMorningDigestTestSequence(skip);
 });
 
 app.post("/trigger/digest", (req, res) => {
