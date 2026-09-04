@@ -4,6 +4,7 @@
 // to every scheduled report type.
 
 import { runInternalReportWithFlags } from "./reportEngine.js";
+import { getMainLeadsReference } from "./mainLeadsSheet.js";
 
 const MORNING_DIGEST_INSTRUCTIONS = `Generate this person's MORNING DIGEST for today.
 
@@ -75,6 +76,15 @@ the last check. For every lead marked Hot in this digest, include a one-line rea
 signal (e.g. "asked about financing terms," "requested a sea trial date," "note: broker says client ready
 to make an offer this week") - never just list the name.
 
+If a MAIN LEADS SHEET reference block is included below, cross-check every Hot-lead candidate against
+it before including them - it's leadership's own hand-maintained list of leads they already consider
+genuinely significant, a stronger anchor than GHL's tier tags (which go stale). A lead on that list,
+especially with an A+ Quality rating, is real evidence toward Hot. A lead NOT on that list needs clear,
+specific, current buying-signal language from this run's own message/note data - not just an old tier
+tag - before you call it Hot; when the evidence is thin and the lead isn't on the list, leave it out
+rather than including it on a guess. This list doesn't replace checking real GHL data - it's a
+cross-check on top of it, not a substitute for reading the actual conversation/notes.
+
 Structure the report in this order, ALWAYS with Hot leads (regardless of tier) surfaced first, then
 Buy Now, then Active, then Nurture:
 
@@ -139,13 +149,22 @@ Flag a lead as "near_close" if, from what you actually read in their conversatio
 like it could realistically close within roughly 2-4 weeks (e.g. under contract, offer being finalized,
 survey/closing scheduled, buyer explicitly said a timeline that fits this window).
 
-Flag a lead as "alert" if something looks genuinely wrong and leadership visibility could help - NOT
-just "overdue for cadence" (that's already normal digest content), but something more serious: a lead
-who showed clear negative sentiment and got no follow-up, a lead who went silent right after something
-concerning (a bad call, a complaint, a competitor mention), or a Buy Now/Hot lead who's been unreachable
-for an unusually long stretch given how hot they are. Same resolution check applies here as everywhere
-else in this digest: if a later note or message already addressed what looked concerning, it's not an
-alert. Use judgment - this should be rare, not routine.
+Flag a lead as "alert" ONLY if BOTH of these hold - this is deliberately narrow, most digests should
+have ZERO alerts, and this is NOT the place for routine missed-follow-up tracking (that's handled
+separately, automatically, from real timestamps - don't duplicate it here):
+1. ZERO contact of any kind - no message AND no note - for at least 7 full days, and as long as 14 days
+   is still worth flagging. Verify this directly: call get_last_broker_contact_date AND
+   get_contact_notes and confirm BOTH are silent for that whole window - a note logged 3 days ago with
+   no message since does NOT qualify, and neither does a message 3 days ago with no note since. Genuine
+   silence on both channels, for the full window, is required.
+2. The deal was genuinely hot/promising BEFORE the silence started (strong buying signals, Buy Now
+   tier with real engagement, a showing or offer that was actively moving) AND is now at real risk of
+   being lost specifically because of that silence - not just "hasn't progressed" or "missed a
+   follow-up." A lead that was lukewarm or early-stage before going quiet does not qualify, even after
+   14 days - going quiet isn't itself a loss risk unless there was real momentum to lose.
+Both conditions are required - a hot lead with a missed follow-up but recent contact otherwise does NOT
+qualify, and a long-silent lead that was never actually hot does NOT qualify either. If a later note or
+message already addressed the silence, it's not an alert - check for that before flagging.
 
 Output the exact marker "===FLAGS===" on its own line right after "===END===", then a JSON array (even
 if empty: []) of objects shaped like:
@@ -154,10 +173,17 @@ Then output the exact marker "===END_FLAGS===" on its own line. Valid JSON only 
 fences, no trailing commas, no comments. If there's nothing to flag, output an empty array: [].`;
 
 /**
- * Generates a single person's morning digest.
+ * Generates a single person's morning digest. Cached for ~10 minutes (see
+ * mainLeadsSheet.js), so every person in the same digest run gets
+ * byte-identical instructions text - preserves prompt caching across the
+ * whole roster loop, same as before this reference existed.
  * @param {{name: string, role: string}} identity - a roster entry
  * @returns {Promise<{text: string, flags: Array}>}
  */
 export async function generateMorningDigest(identity) {
-  return runInternalReportWithFlags(identity, MORNING_DIGEST_INSTRUCTIONS, "morning digest");
+  const mainLeadsRef = await getMainLeadsReference();
+  const instructions = mainLeadsRef
+    ? `${MORNING_DIGEST_INSTRUCTIONS}\n\n${mainLeadsRef}`
+    : MORNING_DIGEST_INSTRUCTIONS;
+  return runInternalReportWithFlags(identity, instructions, "morning digest");
 }
