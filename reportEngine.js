@@ -75,6 +75,13 @@ him today to lock in a time."`;
  *   covers those)
  * @param {string} reportLabel - used only in log messages, e.g. "morning digest"
  */
+// Deep multi-lead GHL scans (the whole point of these reports) can
+// legitimately pause_turn several times over one long agentic run - same
+// root cause and same fix as claude.js's live-chat tool loop, just never
+// applied here. Generous cap since a report covering a broker's full lead
+// list needs more headroom than a normal chat turn.
+const MAX_PAUSE_RESUMES = 20;
+
 /**
  * Core Claude call shared by both report modes below. Not exported -
  * callers use runInternalReport or runInternalReportWithFlags.
@@ -102,39 +109,59 @@ current date from anything else.`;
 
   const userContext = `${dateContext}\n\nCURRENT USER: ${identity.name}, role: ${identity.role}.`;
 
-  return anthropic.messages.create(
-    {
-      model: "claude-sonnet-4-6",
-      // A controlled budget, not an unbounded ceiling - if a run genuinely
-      // needs more (e.g. several leads needing a full conversation read
-      // for the "no next action" recommendations), the fallback below
-      // kicks in instead of the response just going missing. Callers
-      // covering more ground in one turn (e.g. the leadership performance
-      // review, which loops every broker) pass a higher maxTokens.
-      max_tokens: maxTokens,
-      system: [
-        { type: "text", text: staticBlock, cache_control: { type: "ephemeral" } },
-        { type: "text", text: userContext },
-      ],
-      messages: [{ role: "user", content: "Generate the report now." }],
-      mcp_servers: [
-        {
-          type: "url",
-          url: process.env.GHL_MCP_URL,
-          name: "ghl-coaching-mcp",
-          // The GHL MCP server runs stateless, re-verifying this SAME token
-          // on every individual tool call within the turn (not once per
-          // turn) - a report covering more ground (higher maxTokens, more
-          // tool calls, real network latency) can outlast the default
-          // 5-minute expiry, so callers with a bigger maxTokens should pass
-          // a matching tokenTtlMinutes or later tool calls get silently
-          // rejected with "invalid or expired token" mid-report.
-          authorization_token: mintIdentityToken(identity, tokenTtlMinutes),
-        },
-      ],
-    },
-    { headers: { "anthropic-beta": "mcp-client-2025-04-04" } }
-  );
+  const requestBody = {
+    model: "claude-sonnet-4-6",
+    // A controlled budget, not an unbounded ceiling - if a run genuinely
+    // needs more (e.g. several leads needing a full conversation read
+    // for the "no next action" recommendations), the fallback below
+    // kicks in instead of the response just going missing. Callers
+    // covering more ground in one turn (e.g. the leadership performance
+    // review, which loops every broker) pass a higher maxTokens.
+    max_tokens: maxTokens,
+    system: [
+      { type: "text", text: staticBlock, cache_control: { type: "ephemeral" } },
+      { type: "text", text: userContext },
+    ],
+    messages: [{ role: "user", content: "Generate the report now." }],
+    mcp_servers: [
+      {
+        type: "url",
+        url: process.env.GHL_MCP_URL,
+        name: "ghl-coaching-mcp",
+        // The GHL MCP server runs stateless, re-verifying this SAME token
+        // on every individual tool call within the turn (not once per
+        // turn) - a report covering more ground (higher maxTokens, more
+        // tool calls, real network latency) can outlast the default
+        // 5-minute expiry, so callers with a bigger maxTokens should pass
+        // a matching tokenTtlMinutes or later tool calls get silently
+        // rejected with "invalid or expired token" mid-report.
+        authorization_token: mintIdentityToken(identity, tokenTtlMinutes),
+      },
+    ],
+  };
+  const requestOptions = { headers: { "anthropic-beta": "mcp-client-2025-04-04" } };
+
+  let response = await anthropic.messages.create(requestBody, requestOptions);
+  let resumes = 0;
+  // pause_turn means the agentic run got paused mid-scan, NOT that it's
+  // done - resuming just means resending the paused content back with no
+  // tool_result needed. Without this, a deep GHL scan that pauses returns
+  // whatever mid-thought fragment existed so far as if it were the
+  // finished report (this is what "spent a lot of tokens, got one sentence
+  // back" looks like) - burning the tokens already spent on the scan for
+  // nothing.
+  while (response.stop_reason === "pause_turn" && resumes < MAX_PAUSE_RESUMES) {
+    requestBody.messages = [...requestBody.messages, { role: "assistant", content: response.content }];
+    response = await anthropic.messages.create(requestBody, requestOptions);
+    resumes++;
+  }
+  if (resumes > 0) {
+    console.log(`Report for ${identity.name} resumed from pause_turn ${resumes} time(s).`);
+  }
+  if (response.stop_reason === "pause_turn") {
+    console.warn(`Report for ${identity.name} still paused after ${MAX_PAUSE_RESUMES} resumes - returning what exists.`);
+  }
+  return response;
 }
 
 function extractBetweenMarkers(allText, startMarker, endMarker) {
