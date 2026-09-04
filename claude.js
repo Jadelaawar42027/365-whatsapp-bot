@@ -259,7 +259,19 @@ export function markTemplateSent(conversationKey, templateText) {
  * @param {{name: string, role: string, phone?: string}|null|undefined} identity - resolved identity for this sender, or null/undefined if unregistered
  * @param {'whatsapp'|'slack'} [channel] - which channel this came in on, recorded on interaction_log rows
  */
+const UNREGISTERED_REPLY =
+  "Hey — this number isn't registered yet, so I can't help with leads/deals here. Ping Aj to get added.";
+
 export async function askClaude(conversationKey, userMessage, identity, channel) {
+  // Cost win, zero capability loss: this reply never varies regardless of
+  // what an unregistered sender writes (wrong number, spam, an old number
+  // still saved by someone no longer with the team) - no real judgment was
+  // ever being exercised by routing this through a full Claude call against
+  // the cached system prompt, so skip the API entirely rather than paying
+  // for a deterministic boilerplate reply. Also skips ever touching
+  // `history` for a sender who'll never get a different answer either way.
+  if (!identity) return UNREGISTERED_REPLY;
+
   const history = getHistory(conversationKey);
 
   // broker_id throughout db/ is the WhatsApp roster phone number
@@ -391,11 +403,8 @@ current date from anything else.`;
     // `mcp_toolset` type here was rejected outright with a 400 in
     // production. `tools` below is ONLY the local memory tools.
     if (MEMORY_ENABLED) tools = [...MEMORY_TOOLS];
-  } else {
-    userContext = `${dateContext}\n\nCURRENT USER: not on the broker roster. You have NO access to GHL/CRM ` +
-      `tools for this conversation. If asked about leads, deals, or CRM data, explain that this number ` +
-      `isn't registered yet and to contact Aj to get added.`;
   }
+  // (no `else` - unregistered senders return early above, before this point)
 
   // One-shot: only the reply immediately after a template send sees this note.
   const pendingTemplate = pendingTemplateContext.get(conversationKey);
