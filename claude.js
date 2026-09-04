@@ -216,6 +216,27 @@ function getHistory(conversationKey) {
   return conversations.get(conversationKey);
 }
 
+// Outbound WhatsApp template sends (see server.js's runDailyTemplateSequence)
+// never touch `conversations` above - they go out via the raw WhatsApp API,
+// not through askClaude - so a person's FIRST reply to one (often just
+// "yes", mirroring the template's own "reply yes to activate" wording) has
+// zero history to make sense of. Without this, that bare "yes" looks like a
+// cut-off message with no context, and the AI says so - exactly the bug
+// this fixes. One-shot: consumed (deleted) the moment the next message from
+// that person is processed, so it only ever affects that first reply.
+const pendingTemplateContext = new Map();
+
+/**
+ * Call right after successfully sending a WhatsApp template, so the
+ * recipient's next reply - even a bare "yes" - has enough context to
+ * interpret correctly instead of looking like a truncated message.
+ * @param {string} conversationKey - the recipient's phone number
+ * @param {string} templateText - the template's actual approved body text
+ */
+export function markTemplateSent(conversationKey, templateText) {
+  pendingTemplateContext.set(conversationKey, templateText);
+}
+
 /**
  * Sends the user's message to Claude along with their conversation history,
  * appends the exchange to history, and returns Claude's reply text. This is
@@ -374,6 +395,15 @@ current date from anything else.`;
     userContext = `${dateContext}\n\nCURRENT USER: not on the broker roster. You have NO access to GHL/CRM ` +
       `tools for this conversation. If asked about leads, deals, or CRM data, explain that this number ` +
       `isn't registered yet and to contact Aj to get added.`;
+  }
+
+  // One-shot: only the reply immediately after a template send sees this note.
+  const pendingTemplate = pendingTemplateContext.get(conversationKey);
+  if (pendingTemplate) {
+    pendingTemplateContext.delete(conversationKey);
+    userContext += `\n\nNOTE: this person was just sent this WhatsApp template message: "${pendingTemplate}" - ` +
+      `if their reply is short (e.g. "yes", "yep", "ready"), treat it as a direct answer to that, not as a ` +
+      `truncated or cut-off message - respond naturally to what they confirmed, don't ask if their message got cut off.`;
   }
 
   // Prompt caching: the base system prompt (core rules + knowledge base doc)

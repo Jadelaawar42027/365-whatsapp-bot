@@ -1,7 +1,7 @@
 import "dotenv/config";
 import express from "express";
 import { sendWhatsAppMessage, sendTypingIndicator, sendTemplateMessage } from "./whatsapp.js";
-import { handleIncomingMessage } from "./claude.js";
+import { handleIncomingMessage, markTemplateSent } from "./claude.js";
 import { handleSlackEvent } from "./slack.js";
 import { logExchange } from "./conversationLog.js";
 import { getIdentityForPhone, getIdentityByName, getLeadershipEntries, BROKER_ROSTER } from "./brokerRoster.js";
@@ -433,10 +433,16 @@ app.post("/trigger/eod-checkin", (req, res) => {
 // "starter" was added to the WABA that actually owns the deployed phone
 // number (1085003924210260, phone 1290223800835641) and confirmed live on
 // WhatsApp. Both the real send and the leadership-only test below read from
-// these two constants, so there's only one place to update if the template
-// changes again.
+// these constants, so there's only one place to update if the template
+// changes again. DAILY_TEMPLATE_TEXT is the template's actual approved body
+// (confirmed via the Graph API's message_templates endpoint) - used ONLY to
+// give askClaude context for a person's first reply (see
+// claude.js's markTemplateSent/pendingTemplateContext), not sent anywhere
+// itself; the real send below still goes through WhatsApp's own template
+// delivery, unrelated to this string.
 const DAILY_TEMPLATE_NAME = "starter";
 const DAILY_TEMPLATE_LANGUAGE = "en";
+const DAILY_TEMPLATE_TEXT = "Hey are you ready to start the day? (Please reply with yes to activate the AI messages for today)";
 
 /**
  * Sends the approved WhatsApp template (see DAILY_TEMPLATE_NAME above) to
@@ -450,6 +456,7 @@ async function runDailyTemplateSequence() {
   for (const person of roster) {
     try {
       await sendTemplateMessage(person.phone, DAILY_TEMPLATE_NAME, DAILY_TEMPLATE_LANGUAGE);
+      markTemplateSent(person.phone, DAILY_TEMPLATE_TEXT);
       logExchange({
         phone: person.phone,
         name: person.name,
@@ -480,6 +487,7 @@ app.post("/trigger/daily-template-test", (req, res) => {
     for (const person of leadership) {
       try {
         await sendTemplateMessage(person.phone, DAILY_TEMPLATE_NAME, DAILY_TEMPLATE_LANGUAGE);
+        markTemplateSent(person.phone, DAILY_TEMPLATE_TEXT);
         logExchange({
           phone: person.phone,
           name: person.name,
