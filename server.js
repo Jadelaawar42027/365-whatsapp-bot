@@ -342,7 +342,10 @@ async function runMorningDigestSequence() {
 async function runMorningDigestTestSequence() {
   const roster = Object.entries(BROKER_ROSTER).map(([phone, identity]) => ({ phone, ...identity }));
   const brokers = roster.filter((p) => p.role === "broker");
-  const leadership = roster.filter((p) => p.role === "leadership");
+  // Test runs go to Aj only, not the whole leadership group - keeps test
+  // traffic (every broker's digest, relabeled [TEST]) off other leadership
+  // phones while a change is being verified.
+  const leadership = roster.filter((p) => p.role === "leadership" && p.phone === "34645496611");
 
   if (leadership.length === 0) {
     console.warn("Digest test run: no leadership entries to send test output to - aborting.");
