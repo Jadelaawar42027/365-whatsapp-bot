@@ -107,6 +107,19 @@ app.post("/webhook", async (req, res) => {
 
     const from = message.from; // sender's phone number
 
+    // message.timestamp is WhatsApp's own record of when THEY received this
+    // message (Unix seconds) - comparing it against when we're actually
+    // processing it is the one piece of evidence that would confirm or
+    // rule out delayed/backlogged webhook delivery (e.g. around a redeploy)
+    // as the cause of the recurring "message ID doesn't exist" / "outside
+    // 24h window" failures, instead of continuing to guess at it.
+    if (message.timestamp) {
+      const ageSeconds = Math.round(Date.now() / 1000 - Number(message.timestamp));
+      if (ageSeconds > 10) {
+        console.warn(`Incoming message from ${from} is ${ageSeconds}s old by WhatsApp's own timestamp - processed late, not fresh.`);
+      }
+    }
+
     // Show the native "typing..." indicator right away - best-effort, don't
     // block on it. WhatsApp auto-dismisses it after 25s OR the moment ANY
     // message is sent to this person, whichever comes first - so a fallback
