@@ -62,6 +62,23 @@ app.post("/webhook", async (req, res) => {
     const value = change?.value;
     const message = value?.messages?.[0];
 
+    // Which business number this message was actually sent TO, per Meta's
+    // own webhook metadata - checking this against our configured
+    // WHATSAPP_PHONE_NUMBER_ID is the one thing that would prove or rule
+    // out a phone-number mismatch as the cause of the recurring "message ID
+    // doesn't exist"/"outside 24h window" failures (ruled out as a delay
+    // issue - confirmed a 2.4s turnaround on one real occurrence). If a
+    // message ever logs a DIFFERENT phone_number_id than our own, replies
+    // would be going out from a number the sender never actually messaged.
+    if (message && value?.metadata?.phone_number_id && value.metadata.phone_number_id !== process.env.WHATSAPP_PHONE_NUMBER_ID) {
+      console.warn(
+        `Incoming message's phone_number_id (${value.metadata.phone_number_id}, ` +
+        `${value.metadata.display_phone_number || "?"}) does NOT match our configured ` +
+        `WHATSAPP_PHONE_NUMBER_ID (${process.env.WHATSAPP_PHONE_NUMBER_ID}) - replies would go out ` +
+        `from a number this sender never actually messaged.`
+      );
+    }
+
     if (!message) {
       // Not a new message - could be a delivery status callback
       // (sent/delivered/read/failed). Log failures specifically, since a
