@@ -91,9 +91,26 @@ export async function sendWhatsAppMessage(to, text) {
  *   language the template is actually registered under in WhatsApp Manager exactly (Meta
  *   treats 'en' and 'en_US' as distinct - sending the wrong one fails with error 132001,
  *   "Template name does not exist in the translation", even if the template name is correct)
+ * @param {string[]} [bodyParams] - values to fill the template body's {{1}}, {{2}}, ... placeholders,
+ *   in order. Omit (or pass []) for a template with no placeholders at all - a template that HAS
+ *   placeholders but gets an empty/missing parameters array fails outright, so this must match
+ *   whatever the approved template actually declares.
  */
-export async function sendTemplateMessage(to, templateName, languageCode = "en") {
+export async function sendTemplateMessage(to, templateName, languageCode = "en", bodyParams = []) {
   const url = `https://graph.facebook.com/${GRAPH_API_VERSION}/${process.env.WHATSAPP_PHONE_NUMBER_ID}/messages`;
+
+  const template = {
+    name: templateName,
+    language: { code: languageCode },
+  };
+  if (bodyParams.length > 0) {
+    template.components = [
+      {
+        type: "body",
+        parameters: bodyParams.map((text) => ({ type: "text", text })),
+      },
+    ];
+  }
 
   try {
     await axios.post(
@@ -102,10 +119,7 @@ export async function sendTemplateMessage(to, templateName, languageCode = "en")
         messaging_product: "whatsapp",
         to,
         type: "template",
-        template: {
-          name: templateName,
-          language: { code: languageCode },
-        },
+        template,
       },
       {
         headers: {

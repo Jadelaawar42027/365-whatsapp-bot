@@ -489,33 +489,39 @@ app.post("/trigger/eod-checkin", (req, res) => {
   runBatchReport(generateEODCheckin, "EOD check-in");
 });
 
-// "starter" was added to the WABA that actually owns the deployed phone
-// number (1085003924210260, phone 1290223800835641) and confirmed live on
-// WhatsApp. Both the real send and the leadership-only test below read from
-// these constants, so there's only one place to update if the template
-// changes again. DAILY_TEMPLATE_TEXT is the template's actual approved body
-// (confirmed via the Graph API's message_templates endpoint) - used ONLY to
-// give askClaude context for a person's first reply (see
-// claude.js's markTemplateSent/pendingTemplateContext), not sent anywhere
-// itself; the real send below still goes through WhatsApp's own template
-// delivery, unrelated to this string.
-const DAILY_TEMPLATE_NAME = "starter";
+// "starter" (identical static text to everyone) kept getting silently
+// reclassified from UTILITY to MARKETING by Meta's automated review despite
+// two differently-worded resubmission attempts - confirmed a real production
+// incident where 9 of 11 recipients got error 131049 ("not delivered to
+// maintain healthy ecosystem engagement") on the same daily send, since
+// almost the whole roster shares low engagement with this exact recurring
+// broadcast. "daily_activation_personalized" (name-personalized per
+// recipient, {{1}} placeholder) was submitted as a next attempt at avoiding
+// that reclassification - a template with real per-recipient variation reads
+// far more like a genuine account/utility notification than an identical
+// broadcast to Meta's classifier. Swap DAILY_TEMPLATE_NAME back to "starter"
+// (and drop the bodyParams arg below) if this one also gets flipped to
+// MARKETING - it isn't a fix for the underlying policy either way, just a
+// second real attempt to avoid it entirely.
+const DAILY_TEMPLATE_NAME = "daily_activation_personalized";
 const DAILY_TEMPLATE_LANGUAGE = "en";
-const DAILY_TEMPLATE_TEXT = "Hey are you ready to start the day? (Please reply with yes to activate the AI messages for today)";
+const dailyTemplateText = (name) => `Hey ${name} - ready to start the day? Reply YES to activate today's updates.`;
 
 /**
  * Sends the approved WhatsApp template (see DAILY_TEMPLATE_NAME above) to
  * every roster entry (brokers and leadership alike) to reopen each
  * person's 24-hour messaging window before regular free-form reports need
- * to go out.
+ * to go out. Personalized with each person's own first name as the
+ * template's {{1}} placeholder.
  */
 async function runDailyTemplateSequence() {
   const roster = Object.entries(BROKER_ROSTER).map(([phone, identity]) => ({ phone, ...identity }));
 
   for (const person of roster) {
     try {
-      await sendTemplateMessage(person.phone, DAILY_TEMPLATE_NAME, DAILY_TEMPLATE_LANGUAGE);
-      markTemplateSent(person.phone, DAILY_TEMPLATE_TEXT);
+      const firstName = person.name.split(" ")[0];
+      await sendTemplateMessage(person.phone, DAILY_TEMPLATE_NAME, DAILY_TEMPLATE_LANGUAGE, [firstName]);
+      markTemplateSent(person.phone, dailyTemplateText(firstName));
       logExchange({
         phone: person.phone,
         name: person.name,
@@ -545,8 +551,9 @@ app.post("/trigger/daily-template-test", (req, res) => {
   (async () => {
     for (const person of leadership) {
       try {
-        await sendTemplateMessage(person.phone, DAILY_TEMPLATE_NAME, DAILY_TEMPLATE_LANGUAGE);
-        markTemplateSent(person.phone, DAILY_TEMPLATE_TEXT);
+        const firstName = person.name.split(" ")[0];
+        await sendTemplateMessage(person.phone, DAILY_TEMPLATE_NAME, DAILY_TEMPLATE_LANGUAGE, [firstName]);
+        markTemplateSent(person.phone, dailyTemplateText(firstName));
         logExchange({
           phone: person.phone,
           name: person.name,
