@@ -9,7 +9,8 @@ import { generateMorningDigest } from "./digest.js";
 import { generateEODCheckin } from "./eodCheckin.js";
 import { generateCallReview } from "./callReview.js";
 import { callGhlMcpTool } from "./ghlMcpClient.js";
-import { parseBudgetToNumber } from "./budgetParser.js";
+import { backfillOpportunityBudget, findEmptyBuyerPipelineOpportunity, writeOpportunityBudget, buildBudgetExtractionInstructions } from "./budgetBackfill.js";
+import { runBudgetExtraction } from "./reportEngine.js";
 import { generateNoShowFollowup } from "./noShowFollowup.js";
 import { formatCollectedAlerts } from "./leadershipDigest.js";
 import { generateBrokerPerformanceReview } from "./brokerPerformanceReview.js";
@@ -625,60 +626,109 @@ app.post("/trigger/call-review", async (req, res) => {
   })();
 });
 
-// A GHL contact typically has an opportunity in SEVERAL pipelines at once (the real Buyer
-// Pipeline deal, plus non-deal pipelines like the email-nurture list and the setter-cadence
-// tracker) - confirmed against production data, where every one of them independently shows
-// monetaryValue: 0. Filtering by "which opportunity has an empty value" is therefore
-// ambiguous on almost every real lead. The budget belongs on the actual sales-cycle deal, so
-// target this specific pipeline (confirmed via list_pipelines: "Buyer Pipeline", the one
-// with New Leads -> ... -> Under Contract -> Closing Process -> Owners Club - Win stages) -
-// never guess between pipelines.
-const BUYER_PIPELINE_ID = "yp2TxpYmvRutPkNuoP69";
+// ---------------------------------------------------------------------------
+// 4b) One-time budget-backfill sweep — manually triggered (not GHL-wired like the endpoints
+//     around it) to run the same budget backfill as call-review across a broker's EXISTING
+//     assigned leads, for leads whose calls already happened before this feature existed.
+//     Unlike call-review, there's no review already running to extract the budget mention
+//     for free, so this pays for one small, lean Claude call per lead that's actually missing
+//     a value (reportEngine.js's runBudgetExtraction) - the cheap read-only opportunity check
+//     always runs first, so leads that already have a value never trigger a Claude call at
+//     all. Sequential with a gap between leads, same reasoning as runBatchReport.
+// ---------------------------------------------------------------------------
+app.post("/trigger/budget-backfill-sweep", async (req, res) => {
+  if (!requireTriggerAuth(req, res)) return;
 
-async function backfillOpportunityBudget(identity, contactId, budgetRaw) {
-  if (!budgetRaw) return;
+  const body = req.body || {};
+  const adminName = body.adminName;
+  const brokerName = body.brokerName; // optional - omit to run for every broker in the roster
+  const skipContactIds = new Set(Array.isArray(body.skipContactIds) ? body.skipContactIds : []);
 
-  const parsedBudget = parseBudgetToNumber(budgetRaw);
-  if (parsedBudget === null) {
-    console.warn(`Budget backfill: couldn't confidently parse budget text "${budgetRaw}" for contact ${contactId} - skipping.`);
-    return;
+  if (!adminName) {
+    return res.status(400).json({ error: "Missing required field: adminName." });
+  }
+  const adminIdentity = getIdentityByName(adminName);
+  if (!adminIdentity || adminIdentity.role !== "leadership") {
+    return res.status(403).json({ error: `"${adminName}" must resolve to a unique leadership roster entry - this sweep reads/writes every broker's leads.` });
   }
 
-  let opportunities;
-  try {
-    opportunities = await callGhlMcpTool(identity, "get_opportunities_for_contact", { contactId });
-  } catch (err) {
-    console.error(`Budget backfill: failed to fetch opportunities for contact ${contactId}:`, err.message);
-    return;
+  let targetBrokers;
+  if (brokerName) {
+    const brokerIdentity = getIdentityByName(brokerName);
+    if (!brokerIdentity || brokerIdentity.role !== "broker") {
+      return res.status(404).json({ error: `"${brokerName}" must resolve to a unique broker roster entry.` });
+    }
+    targetBrokers = [brokerIdentity];
+  } else {
+    targetBrokers = Object.values(BROKER_ROSTER).filter((entry) => entry.role === "broker");
   }
 
-  const buyerPipelineOpportunities = (opportunities || []).filter((o) => o.pipelineId === BUYER_PIPELINE_ID);
-  if (buyerPipelineOpportunities.length === 0) {
-    console.log(`Budget backfill: contact ${contactId} has no Buyer Pipeline opportunity - nothing to do.`);
-    return;
-  }
-  if (buyerPipelineOpportunities.length > 1) {
-    console.warn(`Budget backfill: contact ${contactId} has ${buyerPipelineOpportunities.length} Buyer Pipeline opportunities - ambiguous which to update, skipping.`);
-    return;
-  }
+  res.status(202).json({ status: "accepted", admin: adminIdentity.name, brokers: targetBrokers.map((b) => b.name) });
 
-  const targetOpportunity = buyerPipelineOpportunities[0];
-  if (targetOpportunity.monetaryValue) {
-    console.log(`Budget backfill: contact ${contactId}'s Buyer Pipeline opportunity already has a value (${targetOpportunity.monetaryValue}) - not overwriting.`);
-    return;
-  }
+  (async () => {
+    const summary = { updated: 0, alreadyHadValue: 0, noBuyerPipelineOpportunity: 0, ambiguous: 0, noBudgetMentioned: 0, parseFailed: 0, fetchFailed: 0, skipped: 0 };
+    try {
+      const brokerDirectory = await callGhlMcpTool(adminIdentity, "list_brokers", {});
+      for (const broker of targetBrokers) {
+        const directoryEntry = brokerDirectory.find((b) => b.name.toLowerCase() === broker.name.toLowerCase());
+        if (!directoryEntry) {
+          console.warn(`Budget sweep: no list_brokers match for roster entry "${broker.name}" - skipping this broker.`);
+          continue;
+        }
 
-  try {
-    await callGhlMcpTool(identity, "update_opportunity_value", {
-      contactId,
-      opportunityId: targetOpportunity.id,
-      monetaryValue: parsedBudget,
-    });
-    console.log(`Budget backfill: set opportunity ${targetOpportunity.id} (contact ${contactId}) to ${parsedBudget} from "${budgetRaw}".`);
-  } catch (err) {
-    console.error(`Budget backfill: failed to update opportunity ${targetOpportunity.id} for contact ${contactId}:`, err.message);
-  }
-}
+        console.log(`Budget sweep: fetching lead overview for ${broker.name}...`);
+        const leads = await callGhlMcpTool(adminIdentity, "get_broker_leads_overview", { brokerId: directoryEntry.id });
+
+        for (const lead of leads) {
+          if (lead.error || !lead.id) continue;
+          if (skipContactIds.has(lead.id)) {
+            summary.skipped++;
+            continue;
+          }
+
+          const { opportunity, reason } = await findEmptyBuyerPipelineOpportunity(adminIdentity, lead.id);
+          if (!opportunity) {
+            if (reason === "already_has_value") summary.alreadyHadValue++;
+            else if (reason === "no_buyer_pipeline_opportunity") summary.noBuyerPipelineOpportunity++;
+            else if (reason === "ambiguous") summary.ambiguous++;
+            else summary.fetchFailed++;
+            console.log(`BUDGET-SWEEP-PROCESSED: ${lead.id} (${lead.name || "unnamed"}) - ${reason}`);
+            continue;
+          }
+
+          const budgetRaw = await runBudgetExtraction(adminIdentity, buildBudgetExtractionInstructions(lead.id, lead.name || "this lead"));
+          if (!budgetRaw) {
+            summary.noBudgetMentioned++;
+          } else {
+            const wrote = await writeOpportunityBudget(adminIdentity, lead.id, opportunity, budgetRaw);
+            if (wrote) summary.updated++;
+            else summary.parseFailed++;
+          }
+          console.log(`BUDGET-SWEEP-PROCESSED: ${lead.id} (${lead.name || "unnamed"}) - ${budgetRaw ? "extraction attempted" : "no budget mentioned"}`);
+
+          // Same reasoning as runBatchReport's gap - avoid hammering the GHL MCP server /
+          // Anthropic API across a sweep that can cover hundreds of leads.
+          await new Promise((resolve) => setTimeout(resolve, 500));
+        }
+      }
+
+      const summaryText = `Budget backfill sweep complete for ${targetBrokers.map((b) => b.name).join(", ")}.\n\n` +
+        `✅ Updated: ${summary.updated}\n` +
+        `⏭️ Already had a value: ${summary.alreadyHadValue}\n` +
+        `🚫 No Buyer Pipeline opportunity: ${summary.noBuyerPipelineOpportunity}\n` +
+        `⚠️ Ambiguous (multiple Buyer Pipeline opportunities): ${summary.ambiguous}\n` +
+        `❓ No budget ever mentioned: ${summary.noBudgetMentioned}\n` +
+        `❌ Couldn't parse a mentioned budget: ${summary.parseFailed}\n` +
+        `⚠️ Couldn't fetch opportunities: ${summary.fetchFailed}\n` +
+        `⏩ Skipped (already processed on a prior run): ${summary.skipped}`;
+      console.log(summaryText);
+      await sendWhatsAppMessage(adminIdentity.phone, summaryText);
+    } catch (err) {
+      console.error("Budget backfill sweep failed:", err.message);
+      await sendWhatsAppMessage(adminIdentity.phone, `Budget backfill sweep hit an error and stopped: ${err.message}`).catch(() => {});
+    }
+  })();
+});
 
 // ---------------------------------------------------------------------------
 // 5) No-show follow-up trigger — fired by a GHL automation, same shape as

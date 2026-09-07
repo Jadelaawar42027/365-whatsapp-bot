@@ -85,13 +85,11 @@ him today to lock in a time."`;
 const MAX_PAUSE_RESUMES = 20;
 
 /**
- * Core Claude call shared by both report modes below. Not exported -
- * callers use runInternalReport or runInternalReportWithFlags.
+ * Low-level agentic Claude call shared by every report mode (and the lean budget-only
+ * extraction below) - request construction, MCP wiring, and the pause_turn resume loop.
+ * Not exported - callers go through callForReport or runBudgetExtraction.
  */
-async function callForReport(identity, instructions, maxTokens = 4000, tokenTtlMinutes = 5) {
-  const baseSystemPrompt = await getSystemPrompt();
-  const staticBlock = `${baseSystemPrompt}\n\n---\n\n${REPORT_FORMAT_RULES}\n\n${instructions}`;
-
+async function runAgenticReportCall(identity, staticBlock, maxTokens, tokenTtlMinutes, userTurnText = "Generate the report now.") {
   // CRITICAL: same fix as claude.js - Claude has no built-in awareness of
   // the current date/time, so every "due today", "overdue", "how long ago"
   // judgment in a report needs this injected explicitly. Uncached, since it
@@ -124,7 +122,7 @@ current date from anything else.`;
       { type: "text", text: staticBlock, cache_control: { type: "ephemeral" } },
       { type: "text", text: userContext },
     ],
-    messages: [{ role: "user", content: "Generate the report now." }],
+    messages: [{ role: "user", content: userTurnText }],
     mcp_servers: [
       {
         type: "url",
@@ -164,6 +162,41 @@ current date from anything else.`;
     console.warn(`Report for ${identity.name} still paused after ${MAX_PAUSE_RESUMES} resumes - returning what exists.`);
   }
   return response;
+}
+
+/**
+ * Core Claude call shared by both report modes below. Not exported -
+ * callers use runInternalReport or runInternalReportWithFlags.
+ */
+async function callForReport(identity, instructions, maxTokens = 4000, tokenTtlMinutes = 5) {
+  const baseSystemPrompt = await getSystemPrompt();
+  const staticBlock = `${baseSystemPrompt}\n\n---\n\n${REPORT_FORMAT_RULES}\n\n${instructions}`;
+  return runAgenticReportCall(identity, staticBlock, maxTokens, tokenTtlMinutes);
+}
+
+/**
+ * Lean, silent budget-only extraction for the one-time broker-leads sweep (server.js's
+ * /trigger/budget-backfill-sweep) - skips REPORT_FORMAT_RULES entirely (that's chat-delivery
+ * formatting/priority-label rules, irrelevant here) and returns just the raw budget string,
+ * never a report. Unlike the call-review path (runInternalReportWithBudget), there's no
+ * already-running review to extract this from for free, so this pays for its own dedicated
+ * (but small - max_tokens 400, no report text) Claude call per lead.
+ * @param {{name: string, role: string}} identity
+ * @param {string} instructions - see budgetBackfill.js's buildBudgetExtractionInstructions
+ * @returns {Promise<string|null>} the raw budget text, or null if none found/malformed
+ */
+export async function runBudgetExtraction(identity, instructions) {
+  const baseSystemPrompt = await getSystemPrompt();
+  const staticBlock = `${baseSystemPrompt}\n\n---\n\n${instructions}`;
+  const response = await runAgenticReportCall(identity, staticBlock, 400, 5, "Find the budget now.");
+
+  const allText = response.content
+    .filter((block) => block.type === "text")
+    .map((block) => block.text)
+    .join("\n");
+
+  const budgetRawExtracted = extractBetweenMarkers(allText, BUDGET_MARKER, END_BUDGET_MARKER);
+  return budgetRawExtracted && budgetRawExtracted.toUpperCase() !== "NONE" ? budgetRawExtracted : null;
 }
 
 function extractBetweenMarkers(allText, startMarker, endMarker) {
