@@ -15,6 +15,8 @@ export const FLAGS_MARKER = "===FLAGS===";
 export const END_FLAGS_MARKER = "===END_FLAGS===";
 export const COVERAGE_MARKER = "===COVERAGE===";
 export const END_COVERAGE_MARKER = "===END_COVERAGE===";
+export const BUDGET_MARKER = "===BUDGET===";
+export const END_BUDGET_MARKER = "===END_BUDGET===";
 
 /**
  * Shared formatting/marker rules every report type must follow, appended
@@ -289,6 +291,42 @@ export async function runInternalReportWithFlags(identity, instructions, reportL
  * @param {number} [maxTokens] - output token budget for this report's completion call, defaults to 4000
  * @param {number} [tokenTtlMinutes] - identity token lifetime in minutes, defaults to 5 - raise alongside maxTokens for reports that can run long
  */
+/**
+ * Same as runInternalReport, but ALSO extracts a raw budget-mention string -
+ * used by the call review to backfill an empty GHL opportunity monetaryValue
+ * without a second Claude call. The instructions passed in must tell the
+ * model to output the raw budget text as the client said it (e.g. "$300k-
+ * $400k", "around 500 thousand") - or the literal word "NONE" if no budget
+ * was mentioned on the call - between BUDGET_MARKER and END_BUDGET_MARKER.
+ *
+ * Deliberately returns the RAW string, not a parsed number - turning that
+ * into a clean integer is budgetParser.js's job (pure deterministic JS, no
+ * LLM), since this writes directly to a live CRM field with no human review
+ * after it. Returns budgetRaw: null if the marker is missing/malformed or
+ * the model said "NONE" - both mean "nothing to parse," never a guess.
+ */
+export async function runInternalReportWithBudget(identity, instructions, reportLabel = "report") {
+  const response = await callForReport(identity, instructions);
+
+  const allText = response.content
+    .filter((block) => block.type === "text")
+    .map((block) => block.text)
+    .join("\n");
+
+  let finalText = extractBetweenMarkers(allText, REPORT_MARKER, END_MARKER);
+  if (finalText === null) {
+    console.warn(`${reportLabel} for ${identity.name} did not include the ${REPORT_MARKER} marker - falling back to last text block.`);
+    const textBlocks = response.content.filter((block) => block.type === "text");
+    finalText = (textBlocks[textBlocks.length - 1]?.text || "").trim();
+  }
+  finalText = applyTruncationFallback(finalText, response, identity, reportLabel);
+
+  const budgetRawExtracted = extractBetweenMarkers(allText, BUDGET_MARKER, END_BUDGET_MARKER);
+  const budgetRaw = budgetRawExtracted && budgetRawExtracted.toUpperCase() !== "NONE" ? budgetRawExtracted : null;
+
+  return { text: finalText, budgetRaw };
+}
+
 export async function runInternalReportWithCoverage(identity, instructions, reportLabel = "report", maxTokens = 4000, tokenTtlMinutes = 5) {
   const response = await callForReport(identity, instructions, maxTokens, tokenTtlMinutes);
 

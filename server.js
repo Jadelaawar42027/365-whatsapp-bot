@@ -8,6 +8,8 @@ import { getIdentityForPhone, getIdentityByName, getLeadershipEntries, BROKER_RO
 import { generateMorningDigest } from "./digest.js";
 import { generateEODCheckin } from "./eodCheckin.js";
 import { generateCallReview } from "./callReview.js";
+import { callGhlMcpTool } from "./ghlMcpClient.js";
+import { parseBudgetToNumber } from "./budgetParser.js";
 import { generateNoShowFollowup } from "./noShowFollowup.js";
 import { formatCollectedAlerts } from "./leadershipDigest.js";
 import { generateBrokerPerformanceReview } from "./brokerPerformanceReview.js";
@@ -603,20 +605,80 @@ app.post("/trigger/call-review", async (req, res) => {
     try {
       console.log(`Generating call review for ${identity.name} on contact ${contactName || contactId}...`);
       const review = await generateCallReview(identity, contactId, contactName || "this lead");
-      await sendWhatsAppMessage(identity.phone, review);
+      await sendWhatsAppMessage(identity.phone, review.text);
       logExchange({
         phone: identity.phone,
         name: identity.name,
         role: identity.role,
         direction: "outgoing",
-        message: `[CALL REVIEW - ${contactName || contactId}]\n${review}`,
+        message: `[CALL REVIEW - ${contactName || contactId}]\n${review.text}`,
       });
       console.log(`Call review sent to ${identity.name}.`);
+
+      // Budget backfill: deterministic JS only, no Claude - see budgetParser.js and
+      // ghlMcpClient.js. Never overwrites an opportunity that already has a value, and only
+      // targets the Buyer Pipeline deal (see backfillOpportunityBudget/BUYER_PIPELINE_ID).
+      await backfillOpportunityBudget(identity, contactId, review.budgetRaw);
     } catch (err) {
       console.error(`Failed to generate/send call review for ${identity.name}:`, err.message);
     }
   })();
 });
+
+// A GHL contact typically has an opportunity in SEVERAL pipelines at once (the real Buyer
+// Pipeline deal, plus non-deal pipelines like the email-nurture list and the setter-cadence
+// tracker) - confirmed against production data, where every one of them independently shows
+// monetaryValue: 0. Filtering by "which opportunity has an empty value" is therefore
+// ambiguous on almost every real lead. The budget belongs on the actual sales-cycle deal, so
+// target this specific pipeline (confirmed via list_pipelines: "Buyer Pipeline", the one
+// with New Leads -> ... -> Under Contract -> Closing Process -> Owners Club - Win stages) -
+// never guess between pipelines.
+const BUYER_PIPELINE_ID = "yp2TxpYmvRutPkNuoP69";
+
+async function backfillOpportunityBudget(identity, contactId, budgetRaw) {
+  if (!budgetRaw) return;
+
+  const parsedBudget = parseBudgetToNumber(budgetRaw);
+  if (parsedBudget === null) {
+    console.warn(`Budget backfill: couldn't confidently parse budget text "${budgetRaw}" for contact ${contactId} - skipping.`);
+    return;
+  }
+
+  let opportunities;
+  try {
+    opportunities = await callGhlMcpTool(identity, "get_opportunities_for_contact", { contactId });
+  } catch (err) {
+    console.error(`Budget backfill: failed to fetch opportunities for contact ${contactId}:`, err.message);
+    return;
+  }
+
+  const buyerPipelineOpportunities = (opportunities || []).filter((o) => o.pipelineId === BUYER_PIPELINE_ID);
+  if (buyerPipelineOpportunities.length === 0) {
+    console.log(`Budget backfill: contact ${contactId} has no Buyer Pipeline opportunity - nothing to do.`);
+    return;
+  }
+  if (buyerPipelineOpportunities.length > 1) {
+    console.warn(`Budget backfill: contact ${contactId} has ${buyerPipelineOpportunities.length} Buyer Pipeline opportunities - ambiguous which to update, skipping.`);
+    return;
+  }
+
+  const targetOpportunity = buyerPipelineOpportunities[0];
+  if (targetOpportunity.monetaryValue) {
+    console.log(`Budget backfill: contact ${contactId}'s Buyer Pipeline opportunity already has a value (${targetOpportunity.monetaryValue}) - not overwriting.`);
+    return;
+  }
+
+  try {
+    await callGhlMcpTool(identity, "update_opportunity_value", {
+      contactId,
+      opportunityId: targetOpportunity.id,
+      monetaryValue: parsedBudget,
+    });
+    console.log(`Budget backfill: set opportunity ${targetOpportunity.id} (contact ${contactId}) to ${parsedBudget} from "${budgetRaw}".`);
+  } catch (err) {
+    console.error(`Budget backfill: failed to update opportunity ${targetOpportunity.id} for contact ${contactId}:`, err.message);
+  }
+}
 
 // ---------------------------------------------------------------------------
 // 5) No-show follow-up trigger — fired by a GHL automation, same shape as

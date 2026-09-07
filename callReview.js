@@ -3,7 +3,7 @@
 // digest or EOD check-in. Reviews the specific call that just happened and
 // sends the assigned broker direct coaching feedback on it.
 
-import { runInternalReport } from "./reportEngine.js";
+import { runInternalReportWithBudget } from "./reportEngine.js";
 
 function buildInstructions(contactId, contactName) {
   return `Generate a CALL REVIEW for the broker on their call with ${contactName} (GHL contact ID: ${contactId}).
@@ -44,15 +44,28 @@ referencing actual moments from the transcript rather than generic advice:
 Keep it tight - this is a WhatsApp message someone reads right after a call, not a training document.
 Use the standard per-lead priority label format when referencing the lead. If you can't find a call
 transcript at all (e.g. the call wasn't recorded/transcribed), say so plainly rather than fabricating
-a review.`;
+a review.
+
+SEPARATELY from the review above - after the "===END===" marker, also output a raw budget line so a
+separate deterministic (non-AI) step can backfill this lead's GHL opportunity value if it's currently
+empty. On its own line output the exact marker "===BUDGET===", then on the next line write the client's
+budget EXACTLY as mentioned in the call transcript/notes, in their own words/numbers (e.g. "$300k-
+$400k", "around 500 thousand", "1.2 million") - do not do any math or reformatting yourself, just quote
+the raw figure(s) as said. If no budget was mentioned anywhere in this call's transcript or notes, write
+exactly the word "NONE" instead. Then output the exact marker "===END_BUDGET===" on its own line, with
+nothing after it. Both budget markers are required every time, even when the answer is "NONE".`;
 }
 
 /**
- * Generates a call review for the broker who owns the given contact.
+ * Generates a call review for the broker who owns the given contact, plus the raw budget
+ * mention (if any) from the same call - for GHL opportunity-value backfilling (see
+ * server.js's /trigger/call-review handler, which parses budgetRaw with budgetParser.js and
+ * writes it via ghlMcpClient.js, all without a second Claude call).
  * @param {{name: string, role: string}} identity - the resolved broker's roster entry
  * @param {string} contactId - the GHL contact ID from the webhook
  * @param {string} contactName - the lead's name, for framing (from the webhook payload)
+ * @returns {Promise<{text: string, budgetRaw: string|null}>}
  */
 export async function generateCallReview(identity, contactId, contactName) {
-  return runInternalReport(identity, buildInstructions(contactId, contactName), "call review");
+  return runInternalReportWithBudget(identity, buildInstructions(contactId, contactName), "call review");
 }
