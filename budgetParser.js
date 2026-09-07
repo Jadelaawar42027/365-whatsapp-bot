@@ -40,11 +40,29 @@ const RANGE_RE = new RegExp(
 // and skips this check entirely.
 const BARE_RANGE_MIN = 1000;
 
+// Final sanity floor on the RETURNED amount, regardless of which path produced it - a real
+// production sweep run surfaced several ways a technically-valid regex match still yields a
+// nonsensical result: a suffix silently dropped ("1.2" meant "$1.2 million" but the extracted
+// text lost the word "million" -> parses to 1), a garbled/unrelated transcript fragment
+// ("I had over $3.87" - not a budget at all -> parses to 4), and someone naming actual dollar
+// amounts as an implicit shorthand for thousands ("$350 to $370 range...around $250..." meant
+// $350k-$370k, not $350-$370 -> averages to a literal 360). Nobody buys a yacht for under
+// $1,000 - a result below this is far more likely a lost unit or a bad extraction than a real
+// answer, so refuse it (null) rather than write something this implausible to a live CRM field
+// with no human review after it.
+const MIN_PLAUSIBLE_BUDGET = 1000;
+
 function toAmount(numStr, suffix) {
   const num = parseFloat(numStr.replace(/,/g, ""));
   if (isNaN(num)) return null;
   const multiplier = suffix ? SUFFIX_MULTIPLIERS[suffix.toLowerCase()] || 1 : 1;
   return num * multiplier;
+}
+
+function finalize(amount) {
+  if (amount === null) return null;
+  const rounded = Math.round(amount);
+  return rounded >= MIN_PLAUSIBLE_BUDGET ? rounded : null;
 }
 
 /**
@@ -57,9 +75,15 @@ export function parseBudgetToNumber(rawText) {
   // to handle anyway) to "1 million" up front, since real transcripts say this far more often
   // than a bare numeral - a live sweep run against production surfaced "A million dollars"
   // going unparsed before this existed. Every downstream check still requires a digit to
-  // start the match, so this is the one place that needs to special-case it.
-  const text = rawText.trim().replace(/\b(a|an)\s+(thousand|million)\b/gi, "1 $2");
-  if (!text) return null;
+  // start the match, so this is the one place that needs to special-case it. Also strip
+  // parentheses - "700 (thousand)" is a real extraction the suffix regex otherwise misses
+  // entirely (the "(" breaks the \b boundary immediately after the digits), silently falling
+  // back to treating "700" as a bare number instead of 700,000.
+  const text = rawText
+    .trim()
+    .replace(/\b(a|an)\s+(thousand|million)\b/gi, "1 $2")
+    .replace(/[()]/g, " ");
+  if (!text.trim()) return null;
 
   const rangeMatch = text.match(RANGE_RE);
   if (rangeMatch) {
@@ -78,7 +102,7 @@ export function parseBudgetToNumber(rawText) {
       const amount1 = toAmount(num1, resolvedSuffix1);
       const amount2 = toAmount(num2, resolvedSuffix2);
       if (amount1 === null || amount2 === null) return null;
-      return Math.round((amount1 + amount2) / 2);
+      return finalize((amount1 + amount2) / 2);
     }
   }
 
@@ -91,5 +115,5 @@ export function parseBudgetToNumber(rawText) {
 
   const [, numStr, suffix] = matches[0];
   const amount = toAmount(numStr, suffix);
-  return amount === null ? null : Math.round(amount);
+  return finalize(amount);
 }

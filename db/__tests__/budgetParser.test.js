@@ -80,4 +80,32 @@ describe("parseBudgetToNumber", () => {
     assert.equal(parseBudgetToNumber("a thousand"), 1000);
     assert.equal(parseBudgetToNumber("budget is around a million"), 1000000);
   });
+
+  test("parenthetical suffix - 'X (thousand)'", () => {
+    // Real production bug: the "(" broke the suffix regex's \b boundary right after the
+    // digits, so "thousand" never matched at all and this silently wrote 700 instead of
+    // 700000 to a live GHL opportunity before this fix existed.
+    assert.equal(parseBudgetToNumber("700 (thousand)"), 700000);
+    assert.equal(parseBudgetToNumber("budget is 250 (thousand) or so"), 250000);
+  });
+
+  test("implausibly small result - refuses rather than write a nonsensical value", () => {
+    // All three are real production writes this bug caused, each wrong by 1000x+ or outright
+    // meaningless - nobody buys a yacht for $1, $4, or $360. A dropped unit ("1.2" meant "$1.2
+    // million" but the extracted text lost the word), a garbled transcript fragment (not a
+    // budget at all), and a range where the client meant thousands but said bare numbers -
+    // all three must now come back null instead of a technically-valid but absurd number.
+    assert.equal(parseBudgetToNumber("1.2"), null);
+    assert.equal(parseBudgetToNumber(`"I'm not sure if that's in my budget. I had over $3.87. That would work."`), null);
+    assert.equal(
+      parseBudgetToNumber("$350 to $370 range (for mainship/vessels with good resale); around $250 (for Meridian/Carver type vessels)"),
+      null
+    );
+  });
+
+  test("plausible small-but-real budget still passes the floor", () => {
+    // A genuinely cheap boat/trailer purchase - must not get caught by the implausibility
+    // floor just because it's a smaller number than most yacht budgets.
+    assert.equal(parseBudgetToNumber("16,900 + TTL"), 16900);
+  });
 });
