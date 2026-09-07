@@ -670,48 +670,62 @@ app.post("/trigger/budget-backfill-sweep", async (req, res) => {
 
   (async () => {
     const summary = { updated: 0, alreadyHadValue: 0, noBuyerPipelineOpportunity: 0, ambiguous: 0, noBudgetMentioned: 0, parseFailed: 0, fetchFailed: 0, skipped: 0 };
+    const brokerErrors = [];
     try {
+      // get_broker_leads_overview loops a real GHL API call per assigned contact
+      // server-side - a broker with many leads can genuinely take longer than the MCP
+      // client's default 60s request timeout (confirmed in production: this alone took
+      // down an entire multi-broker run before this override + the per-broker try/catch
+      // below existed).
       const brokerDirectory = await callGhlMcpTool(adminIdentity, "list_brokers", {});
       for (const broker of targetBrokers) {
-        const directoryEntry = brokerDirectory.find((b) => b.name.toLowerCase() === broker.name.toLowerCase());
-        if (!directoryEntry) {
-          console.warn(`Budget sweep: no list_brokers match for roster entry "${broker.name}" - skipping this broker.`);
-          continue;
-        }
-
-        console.log(`Budget sweep: fetching lead overview for ${broker.name}...`);
-        const leads = await callGhlMcpTool(adminIdentity, "get_broker_leads_overview", { brokerId: directoryEntry.id });
-
-        for (const lead of leads) {
-          if (lead.error || !lead.id) continue;
-          if (skipContactIds.has(lead.id)) {
-            summary.skipped++;
+        try {
+          const directoryEntry = brokerDirectory.find((b) => b.name.toLowerCase() === broker.name.toLowerCase());
+          if (!directoryEntry) {
+            console.warn(`Budget sweep: no list_brokers match for roster entry "${broker.name}" - skipping this broker.`);
+            brokerErrors.push(`${broker.name}: no list_brokers match`);
             continue;
           }
 
-          const { opportunity, reason } = await findEmptyBuyerPipelineOpportunity(adminIdentity, lead.id);
-          if (!opportunity) {
-            if (reason === "already_has_value") summary.alreadyHadValue++;
-            else if (reason === "no_buyer_pipeline_opportunity") summary.noBuyerPipelineOpportunity++;
-            else if (reason === "ambiguous") summary.ambiguous++;
-            else summary.fetchFailed++;
-            console.log(`BUDGET-SWEEP-PROCESSED: ${lead.id} (${lead.name || "unnamed"}) - ${reason}`);
-            continue;
-          }
+          console.log(`Budget sweep: fetching lead overview for ${broker.name}...`);
+          const leads = await callGhlMcpTool(adminIdentity, "get_broker_leads_overview", { brokerId: directoryEntry.id }, 180000);
 
-          const budgetRaw = await runBudgetExtraction(adminIdentity, buildBudgetExtractionInstructions(lead.id, lead.name || "this lead"));
-          if (!budgetRaw) {
-            summary.noBudgetMentioned++;
-          } else {
-            const wrote = await writeOpportunityBudget(adminIdentity, lead.id, opportunity, budgetRaw);
-            if (wrote) summary.updated++;
-            else summary.parseFailed++;
-          }
-          console.log(`BUDGET-SWEEP-PROCESSED: ${lead.id} (${lead.name || "unnamed"}) - ${budgetRaw ? "extraction attempted" : "no budget mentioned"}`);
+          for (const lead of leads) {
+            if (lead.error || !lead.id) continue;
+            if (skipContactIds.has(lead.id)) {
+              summary.skipped++;
+              continue;
+            }
 
-          // Same reasoning as runBatchReport's gap - avoid hammering the GHL MCP server /
-          // Anthropic API across a sweep that can cover hundreds of leads.
-          await new Promise((resolve) => setTimeout(resolve, 500));
+            const { opportunity, reason } = await findEmptyBuyerPipelineOpportunity(adminIdentity, lead.id);
+            if (!opportunity) {
+              if (reason === "already_has_value") summary.alreadyHadValue++;
+              else if (reason === "no_buyer_pipeline_opportunity") summary.noBuyerPipelineOpportunity++;
+              else if (reason === "ambiguous") summary.ambiguous++;
+              else summary.fetchFailed++;
+              console.log(`BUDGET-SWEEP-PROCESSED: ${lead.id} (${lead.name || "unnamed"}) - ${reason}`);
+              continue;
+            }
+
+            const budgetRaw = await runBudgetExtraction(adminIdentity, buildBudgetExtractionInstructions(lead.id, lead.name || "this lead"));
+            if (!budgetRaw) {
+              summary.noBudgetMentioned++;
+            } else {
+              const wrote = await writeOpportunityBudget(adminIdentity, lead.id, opportunity, budgetRaw);
+              if (wrote) summary.updated++;
+              else summary.parseFailed++;
+            }
+            console.log(`BUDGET-SWEEP-PROCESSED: ${lead.id} (${lead.name || "unnamed"}) - ${budgetRaw ? "extraction attempted" : "no budget mentioned"}`);
+
+            // Same reasoning as runBatchReport's gap - avoid hammering the GHL MCP server /
+            // Anthropic API across a sweep that can cover hundreds of leads.
+            await new Promise((resolve) => setTimeout(resolve, 500));
+          }
+        } catch (err) {
+          // One broker's failure (e.g. a timeout on a broker with an unusually large lead
+          // list) must never take the rest of the roster down with it.
+          console.error(`Budget sweep: failed for broker ${broker.name}:`, err.message);
+          brokerErrors.push(`${broker.name}: ${err.message}`);
         }
       }
 
@@ -723,7 +737,8 @@ app.post("/trigger/budget-backfill-sweep", async (req, res) => {
         `❓ No budget ever mentioned: ${summary.noBudgetMentioned}\n` +
         `❌ Couldn't parse a mentioned budget: ${summary.parseFailed}\n` +
         `⚠️ Couldn't fetch opportunities: ${summary.fetchFailed}\n` +
-        `⏩ Skipped (already processed on a prior run): ${summary.skipped}`;
+        `⏩ Skipped (already processed on a prior run): ${summary.skipped}` +
+        (brokerErrors.length > 0 ? `\n\n⚠️ Brokers that failed entirely (not counted above):\n${brokerErrors.join("\n")}` : "");
       console.log(summaryText);
       await sendWhatsAppMessage(adminIdentity.phone, summaryText);
     } catch (err) {
