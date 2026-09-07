@@ -53,7 +53,12 @@ function toAmount(numStr, suffix) {
  */
 export function parseBudgetToNumber(rawText) {
   if (!rawText || typeof rawText !== "string") return null;
-  const text = rawText.trim();
+  // Normalize the spoken-article form ("a million", "an thousand" - ungrammatical but cheap
+  // to handle anyway) to "1 million" up front, since real transcripts say this far more often
+  // than a bare numeral - a live sweep run against production surfaced "A million dollars"
+  // going unparsed before this existed. Every downstream check still requires a digit to
+  // start the match, so this is the one place that needs to special-case it.
+  const text = rawText.trim().replace(/\b(a|an)\s+(thousand|million)\b/gi, "1 $2");
   if (!text) return null;
 
   const rangeMatch = text.match(RANGE_RE);

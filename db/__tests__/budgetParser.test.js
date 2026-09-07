@@ -72,4 +72,12 @@ describe("parseBudgetToNumber", () => {
     assert.equal(parseBudgetToNumber("we're looking to spend around $300k-$400k on this"), 350000);
     assert.equal(parseBudgetToNumber("client mentioned a budget of about $500,000"), 500000);
   });
+
+  test("spoken article form - 'a million'/'a thousand' with no numeral", () => {
+    // Surfaced by a real production sweep run: "A million dollars" (Roberto Montag, via
+    // Charlie Seitz's leads) went unparsed before this normalization existed.
+    assert.equal(parseBudgetToNumber("A million dollars"), 1000000);
+    assert.equal(parseBudgetToNumber("a thousand"), 1000);
+    assert.equal(parseBudgetToNumber("budget is around a million"), 1000000);
+  });
 });
