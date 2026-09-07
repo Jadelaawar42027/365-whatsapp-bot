@@ -642,6 +642,7 @@ app.post("/trigger/budget-backfill-sweep", async (req, res) => {
   const body = req.body || {};
   const adminName = body.adminName;
   const brokerName = body.brokerName; // optional - omit to run for every broker in the roster
+  const excludeBrokerNames = new Set((Array.isArray(body.excludeBrokerNames) ? body.excludeBrokerNames : []).map((n) => n.toLowerCase()));
   const skipContactIds = new Set(Array.isArray(body.skipContactIds) ? body.skipContactIds : []);
 
   if (!adminName) {
@@ -660,7 +661,9 @@ app.post("/trigger/budget-backfill-sweep", async (req, res) => {
     }
     targetBrokers = [brokerIdentity];
   } else {
-    targetBrokers = Object.values(BROKER_ROSTER).filter((entry) => entry.role === "broker");
+    targetBrokers = Object.values(BROKER_ROSTER).filter(
+      (entry) => entry.role === "broker" && !excludeBrokerNames.has(entry.name.toLowerCase())
+    );
   }
 
   res.status(202).json({ status: "accepted", admin: adminIdentity.name, brokers: targetBrokers.map((b) => b.name) });
