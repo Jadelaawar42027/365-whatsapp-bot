@@ -340,27 +340,15 @@ async function runMorningDigestSequence() {
     await new Promise((resolve) => setTimeout(resolve, 1000));
   }
 
-  // Leadership goes LAST: their own personal digest (if they have a
-  // personal deal book), then the compiled team summary from everything
-  // collected above - no second scan needed for that summary.
+  // Leadership goes LAST: confirmed none of them personally carry leads (they
+  // only monitor brokers), so there's no personal deal book to scan - a
+  // per-person generateMorningDigest() call here was a full agentic GHL scan
+  // that almost always just produced "no personal deals to report," 3-4
+  // separate times, for identical/near-identical output. Cut entirely - every
+  // leadership member gets ONLY the one shared team summary below, built once
+  // from what was already collected during the broker digests above, at
+  // zero additional Claude cost.
   for (const person of leadership) {
-    try {
-      console.log(`Generating morning digest for leadership ${person.name} (${person.phone})...`);
-      const { text } = await generateMorningDigest(person);
-      await sendWhatsAppMessage(person.phone, text);
-      await postDigestToGhlWebhook(person.name, person.phone, text);
-      logExchange({
-        phone: person.phone,
-        name: person.name,
-        role: person.role,
-        direction: "outgoing",
-        message: `[MORNING DIGEST]\n${text}`,
-      });
-      console.log(`Morning digest sent to ${person.name}.`);
-    } catch (err) {
-      console.error(`Failed to generate/send morning digest for ${person.name}:`, err.message);
-    }
-
     await new Promise((resolve) => setTimeout(resolve, 1000));
 
     try {
@@ -453,25 +441,10 @@ async function runMorningDigestTestSequence(skipPhones = []) {
     await new Promise((resolve) => setTimeout(resolve, 1000));
   }
 
+  // No personal digest for leadership here either - matches the real run
+  // (see above): confirmed none of them personally carry leads, so there's
+  // nothing to scan. Just the one shared team summary, labeled [TEST].
   for (const person of leadership) {
-    try {
-      console.log(`[TEST] Generating morning digest for leadership ${person.name} (${person.phone})...`);
-      const { text } = await generateMorningDigest(person);
-      const leaderLabeled = `[TEST DIGEST — ${person.name}]\n\n${text}`;
-      await sendWhatsAppMessage(person.phone, leaderLabeled);
-      await postDigestToGhlWebhook(person.name, person.phone, leaderLabeled);
-      logExchange({
-        phone: person.phone,
-        name: person.name,
-        role: person.role,
-        direction: "outgoing",
-        message: `[TEST MORNING DIGEST]\n${text}`,
-      });
-      console.log(`[TEST] Digest sent to ${person.name}.`);
-    } catch (err) {
-      console.error(`[TEST] Failed to generate/send morning digest for ${person.name}:`, err.message);
-    }
-
     await new Promise((resolve) => setTimeout(resolve, 1000));
 
     try {

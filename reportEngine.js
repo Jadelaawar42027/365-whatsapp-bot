@@ -9,6 +9,35 @@ import { mintIdentityToken } from "./identity.js";
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
+// Pricing for the model used below (claude-sonnet-4-6), $ per million tokens - confirmed
+// against Anthropic's published rates, not guessed. Cache write is 1.25x base input (a new
+// ephemeral cache entry); cache read is 0.1x base input (serving from an existing one). Update
+// all four together if the model in runAgenticReportCall ever changes.
+const PRICING_PER_MTOK = {
+  input: 3.0,
+  output: 15.0,
+  cacheWrite: 3.75,
+  cacheRead: 0.3,
+};
+
+function usageCostDollars(usage) {
+  return (
+    (usage.input_tokens * PRICING_PER_MTOK.input +
+      usage.output_tokens * PRICING_PER_MTOK.output +
+      usage.cache_creation_input_tokens * PRICING_PER_MTOK.cacheWrite +
+      usage.cache_read_input_tokens * PRICING_PER_MTOK.cacheRead) /
+    1_000_000
+  );
+}
+
+function addUsage(total, usage) {
+  total.input_tokens += usage?.input_tokens || 0;
+  total.output_tokens += usage?.output_tokens || 0;
+  total.cache_creation_input_tokens += usage?.cache_creation_input_tokens || 0;
+  total.cache_read_input_tokens += usage?.cache_read_input_tokens || 0;
+  return total;
+}
+
 export const REPORT_MARKER = "===REPORT===";
 export const END_MARKER = "===END===";
 export const FLAGS_MARKER = "===FLAGS===";
@@ -142,6 +171,8 @@ current date from anything else.`;
   const requestOptions = { headers: { "anthropic-beta": "mcp-client-2025-04-04" } };
 
   let response = await anthropic.messages.create(requestBody, requestOptions);
+  const totalUsage = { input_tokens: 0, output_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 };
+  addUsage(totalUsage, response.usage);
   let resumes = 0;
   // pause_turn means the agentic run got paused mid-scan, NOT that it's
   // done - resuming just means resending the paused content back with no
@@ -149,10 +180,13 @@ current date from anything else.`;
   // whatever mid-thought fragment existed so far as if it were the
   // finished report (this is what "spent a lot of tokens, got one sentence
   // back" looks like) - burning the tokens already spent on the scan for
-  // nothing.
+  // nothing. Each resume is its own billed API call, so its usage gets
+  // added to the running total too - the per-report cost log below needs
+  // the FULL cost of the run, not just the last call in it.
   while (response.stop_reason === "pause_turn" && resumes < MAX_PAUSE_RESUMES) {
     requestBody.messages = [...requestBody.messages, { role: "assistant", content: response.content }];
     response = await anthropic.messages.create(requestBody, requestOptions);
+    addUsage(totalUsage, response.usage);
     resumes++;
   }
   if (resumes > 0) {
@@ -161,6 +195,19 @@ current date from anything else.`;
   if (response.stop_reason === "pause_turn") {
     console.warn(`Report for ${identity.name} still paused after ${MAX_PAUSE_RESUMES} resumes - returning what exists.`);
   }
+
+  // Cost visibility: before this, there was zero token/cost data logged anywhere for digest
+  // calls, making "why does this cost 40 cents" pure guesswork. Grep Railway logs for "[cost]"
+  // to see exactly which usage category (cache reads from tool-heavy scanning vs. fresh input
+  // vs. output) actually drives spend, per person, per run.
+  const cost = usageCostDollars(totalUsage);
+  console.log(
+    `[cost] Report for ${identity.name}: $${cost.toFixed(4)} total ` +
+    `(${resumes + 1} API call${resumes > 0 ? "s" : ""}) - ` +
+    `input=${totalUsage.input_tokens} output=${totalUsage.output_tokens} ` +
+    `cache_write=${totalUsage.cache_creation_input_tokens} cache_read=${totalUsage.cache_read_input_tokens}`
+  );
+
   return response;
 }
 
