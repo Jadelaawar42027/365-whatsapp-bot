@@ -366,6 +366,7 @@ async function runMorningDigestSequence() {
     try {
       const summary = formatCollectedAlerts(collectedFlags, person.name, collectedStaleFollowups);
       await sendWhatsAppMessage(person.phone, summary);
+      await postDigestToGhlWebhook(person.name, person.phone, summary);
       logExchange({
         phone: person.phone,
         name: person.name,
@@ -475,7 +476,9 @@ async function runMorningDigestTestSequence(skipPhones = []) {
 
     try {
       const summary = formatCollectedAlerts(collectedFlags, person.name, collectedStaleFollowups);
-      await sendWhatsAppMessage(person.phone, `[TEST TEAM SUMMARY]\n\n${summary}`);
+      const testLabeled = `[TEST TEAM SUMMARY]\n\n${summary}`;
+      await sendWhatsAppMessage(person.phone, testLabeled);
+      await postDigestToGhlWebhook(person.name, person.phone, testLabeled);
       logExchange({
         phone: person.phone,
         name: person.name,
