@@ -12,10 +12,12 @@ message (you don't have it stored), you're checking the CURRENT real state of th
 day, using the same tools as the morning digest.
 
 First, resolve their own GHL user ID via list_brokers, then use get_broker_leads_overview to get their
-leads with priority/hot status. For Buy Now, Hot, and Active leads, call get_contact_tasks to check for
-tasks with a due date of TODAY, and get_last_broker_contact_date to see if today's date shows as their
-last outbound contact. Only read full conversation timelines if something looks genuinely ambiguous -
-keep tool use lighter than the morning digest since this should be fast to generate.
+leads with priority/hot status - each lead already includes lastOutboundMessageDate, so use that
+directly to see if today's date shows as their last outbound contact rather than calling
+get_last_broker_contact_date separately. For Buy Now, Hot, and Active leads, call get_contact_tasks to
+check for tasks with a due date of TODAY. Only read full conversation timelines if something looks
+genuinely ambiguous - keep tool use lighter than the morning digest since this should be fast to
+generate.
 
 Structure:
 - Open with a short, casual greeting - lower-key than the morning digest, e.g. "Hey [name], quick

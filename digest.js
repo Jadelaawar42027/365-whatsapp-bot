@@ -16,17 +16,20 @@ still genuinely live and actionable right now.
 
 First, resolve their own GHL user ID via list_brokers (match on their name), then use
 get_broker_leads_overview for their own ID to get the full lead list with each lead's priority and hot
-flag. For Buy Now and Active leads especially, call get_last_broker_contact_date to check the REAL date
-of the broker's last outbound message - the precise, automatic signal for whether they're overdue for
-contact, not a guess from skimming text. Also call get_contact_tasks for open/incomplete tasks and due
-dates.
+flag. Each lead in that list already includes lastOutboundMessageDate - the REAL date of the broker's
+last outbound message, the precise, automatic signal for whether a Buy Now or Active lead is overdue for
+contact, not a guess from skimming text. Use that field directly - do NOT call get_last_broker_contact_date
+separately for leads already covered by the overview, that's a redundant round-trip for data you already
+have. Only call it standalone if you need to double-check a specific contact across every one of their
+conversation threads (the overview's field only reflects their primary thread - rare that this matters,
+most contacts have just one). Also call get_contact_tasks for open/incomplete tasks and due dates.
 
 CRITICAL - notes and message history carry EQUAL weight for determining a lead's current status - never
 treat message history as the sole source of truth just because it's the primary data stream. Before
 flagging ANY lead as stale, overdue, or neglected, also call get_contact_notes and directly compare the
-most recent NOTE timestamp against the most recent MESSAGE timestamp (from get_last_broker_contact_date /
-the conversation timeline) - whichever is more recent is the current source of truth for that lead, full
-stop, regardless of which source it came from. A note with no corresponding message at all (e.g. a
+most recent NOTE timestamp against the most recent MESSAGE timestamp (lastOutboundMessageDate from the
+overview, or the conversation timeline) - whichever is more recent is the current source of truth for
+that lead, full stop, regardless of which source it came from. A note with no corresponding message at all (e.g. a
 broker logged a personal-cell call or an in-person meeting that never went through WhatsApp/GHL) is still
 FULLY authoritative for the lead's current state - don't discount it for lacking a paired message. A lead
 with an old last-message-date but a recent note saying "going under contract" or "showing booked for

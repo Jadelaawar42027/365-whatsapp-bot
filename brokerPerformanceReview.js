@@ -27,8 +27,9 @@ over it - never name one of these leads as a cadence gap.
 For each broker, assess cadence compliance on their Buy Now and Active leads specifically (excluding any
 with outcome "Sale Closed" or "Lost" per above - those are the tiers with real expectations otherwise -
 Buy Now should show contact almost daily, Active weekly):
-- Call get_last_broker_contact_date on their Buy Now/Active leads to check if contact is current for
-  their tier.
+- get_broker_leads_overview already includes each lead's lastOutboundMessageDate - use that directly to
+  check if contact is current for their tier, rather than calling get_last_broker_contact_date
+  separately for leads already covered by the overview.
 - Call get_contact_tasks to check whether each Buy Now/Active lead has an open next action.
 - ALWAYS call get_contact_notes before concluding something's missing - a lead can look neglected by
   message/task data alone while a note shows real recent progress (a call on a personal cell, a showing
@@ -60,7 +61,8 @@ sees, purely for troubleshooting, so never mention it in the review itself. Outp
 "===COVERAGE===" on its own line, then a JSON array (even if empty: []) of objects shaped like:
 {"broker": "Broker Name", "buyNowActiveLeadCount": <number of Buy Now/Active leads this broker has,
 from get_broker_leads_overview, EXCLUDING any with outcome "Sale Closed" or "Lost">, "leadsChecked": <number of those you actually called
-get_last_broker_contact_date/get_contact_tasks/get_contact_notes for before writing their section>}
+get_contact_tasks/get_contact_notes for before writing their section (lastOutboundMessageDate already
+comes from get_broker_leads_overview itself, so it doesn't need a separate call to count here)>}
 One object per broker, in the same order list_brokers returned them - include every broker, even ones
 with 0 Buy Now/Active leads (buyNowActiveLeadCount: 0, leadsChecked: 0). Then output the exact marker
 "===END_COVERAGE===" on its own line. Valid JSON only - no markdown code fences, no trailing commas, no
