@@ -1,4 +1,4 @@
-import { CORE_RULES, FALLBACK_KNOWLEDGE } from "./systemPrompt.js";
+import { buildCoreRules, FALLBACK_KNOWLEDGE } from "./systemPrompt.js";
 
 // How long to trust a cached copy of the doc before re-fetching. Short enough
 // that edits show up quickly; long enough that a burst of WhatsApp messages
@@ -129,12 +129,15 @@ async function getSetterKnowledgeBaseText() {
  * get their own separate doc; every other role (broker/leadership) gets the
  * existing shared doc, unchanged from prior behavior.
  * @param {string} [role] - the CURRENT USER's role, e.g. 'broker', 'leadership', 'setter'
+ * @param {'whatsapp'|'slack'|'sms'} [channel] - varies the FORMATTING section only (see
+ *   systemPrompt.js's buildCoreRules) - defaults to WhatsApp-style formatting, unchanged
+ *   behavior for every existing caller that doesn't pass this.
  */
-export async function getSystemPrompt(role) {
+export async function getSystemPrompt(role, channel) {
   const knowledge = role === "setter"
     ? await getSetterKnowledgeBaseText()
     : await getKnowledgeBaseText();
-  return `${CORE_RULES}\n\n---\n\nKNOWLEDGE BASE (editable by Aj — SOPs, scripts, policies):\n\n${knowledge}`;
+  return `${buildCoreRules(channel)}\n\n---\n\nKNOWLEDGE BASE (editable by Aj — SOPs, scripts, policies):\n\n${knowledge}`;
 }
 
 /**

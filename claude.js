@@ -301,7 +301,7 @@ export function markTemplateSent(conversationKey, templateText) {
  * @param {string} conversationKey - unique per-channel sender identifier (phone number, Slack user ID), used as the conversation history key
  * @param {string} userMessage - the incoming message text
  * @param {{name: string, role: string, phone?: string}|null|undefined} identity - resolved identity for this sender, or null/undefined if unregistered
- * @param {'whatsapp'|'slack'} [channel] - which channel this came in on, recorded on interaction_log rows
+ * @param {'whatsapp'|'slack'|'sms'} [channel] - which channel this came in on, recorded on interaction_log rows and used to vary the system prompt's FORMATTING section (see knowledgeBase.js's getSystemPrompt)
  */
 const UNREGISTERED_REPLY =
   "Hey — this number isn't registered yet, so I can't help with leads/deals here. Ping Aj to get added.";
@@ -332,7 +332,7 @@ export async function askClaude(conversationKey, userMessage, identity, channel)
 
   history.push({ role: "user", content: userMessage });
 
-  const baseSystemPrompt = await getSystemPrompt(identity?.role || "broker");
+  const baseSystemPrompt = await getSystemPrompt(identity?.role || "broker", channel);
 
   // CRITICAL: Claude has no built-in awareness of the current date/time -
   // it only knows what's in its context. Without this, every "is this
@@ -659,7 +659,7 @@ current date from anything else.`;
  * @param {string} message.userId - unique per-channel sender identifier (phone number, Slack user ID) - used as the conversation history key
  * @param {{name: string, role: string}|null|undefined} message.identity - resolved identity for this sender, or null/undefined if unregistered
  * @param {string} message.text - the incoming message text
- * @param {'whatsapp'|'slack'} message.channel - which channel this came in on (not currently used to vary behavior, but kept in the shape for when it needs to)
+ * @param {'whatsapp'|'slack'|'sms'} message.channel - which channel this came in on - varies the system prompt's FORMATTING section (WhatsApp markup vs. plain SMS text), see knowledgeBase.js's getSystemPrompt
  * @returns {Promise<string>} reply text
  */
 export async function handleIncomingMessage({ userId, identity, text, channel }) {
