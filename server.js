@@ -287,6 +287,10 @@ async function runMorningDigestSequence() {
   const roster = Object.entries(BROKER_ROSTER).map(([phone, identity]) => ({ phone, ...identity }));
   const brokers = roster.filter((p) => p.role === "broker");
   const leadership = roster.filter((p) => p.role === "leadership");
+  // Aj additionally gets a copy of every broker's digest on WhatsApp - zero extra Claude
+  // cost since it reuses the SAME already-generated text, just an extra WhatsApp send.
+  // Matched by name, not phone, same reasoning as the digest-test routing fix.
+  const ajCopyRecipient = leadership.find((p) => p.name === "Aj El Aawar");
 
   const collectedFlags = [];
   const collectedStaleFollowups = [];
@@ -306,6 +310,16 @@ async function runMorningDigestSequence() {
 
       await sendWhatsAppMessage(person.phone, fullText);
       await postDigestToGhlWebhook(person.name, person.phone, fullText);
+      if (ajCopyRecipient && ajCopyRecipient.phone !== person.phone) {
+        await sendWhatsAppMessage(ajCopyRecipient.phone, `[${person.name}'s Digest]\n\n${fullText}`);
+        logExchange({
+          phone: ajCopyRecipient.phone,
+          name: ajCopyRecipient.name,
+          role: ajCopyRecipient.role,
+          direction: "outgoing",
+          message: `[BROKER DIGEST COPY - ${person.name}]\n${fullText}`,
+        });
+      }
       logExchange({
         phone: person.phone,
         name: person.name,
