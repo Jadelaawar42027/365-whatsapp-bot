@@ -388,8 +388,10 @@ async function runMorningDigestTestSequence(skipPhones = []) {
   const brokers = roster.filter((p) => p.role === "broker" && !skipPhones.includes(p.phone));
   // Test runs go to Aj only, not the whole leadership group - keeps test
   // traffic (every broker's digest, relabeled [TEST]) off other leadership
-  // phones while a change is being verified.
-  const leadership = roster.filter((p) => p.role === "leadership" && p.phone === "34645496611");
+  // phones while a change is being verified. Matched by name, not phone -
+  // a hardcoded phone string here previously broke silently (zero test
+  // recipients, run aborts) the moment Aj's roster number ever changed.
+  const leadership = roster.filter((p) => p.role === "leadership" && p.name === "Aj El Aawar");
 
   if (leadership.length === 0) {
     console.warn("Digest test run: no leadership entries to send test output to - aborting.");
@@ -410,6 +412,11 @@ async function runMorningDigestTestSequence(skipPhones = []) {
       const labeled = `[TEST DIGEST — ${person.name}]\n\n${fullText}`;
       for (const leader of leadership) {
         await sendWhatsAppMessage(leader.phone, labeled);
+        // Routed to the TEST recipient's own phone, not the real broker's -
+        // GHL's automation finds/creates a contact by whatever phone arrives
+        // and SMSes that contact, so passing leader.phone here is what keeps
+        // this test traffic off any real broker's number.
+        await postDigestToGhlWebhook(person.name, leader.phone, labeled);
         logExchange({
           phone: leader.phone,
           name: leader.name,
@@ -435,7 +442,9 @@ async function runMorningDigestTestSequence(skipPhones = []) {
     try {
       console.log(`[TEST] Generating morning digest for leadership ${person.name} (${person.phone})...`);
       const { text } = await generateMorningDigest(person);
-      await sendWhatsAppMessage(person.phone, `[TEST DIGEST — ${person.name}]\n\n${text}`);
+      const leaderLabeled = `[TEST DIGEST — ${person.name}]\n\n${text}`;
+      await sendWhatsAppMessage(person.phone, leaderLabeled);
+      await postDigestToGhlWebhook(person.name, person.phone, leaderLabeled);
       logExchange({
         phone: person.phone,
         name: person.name,
