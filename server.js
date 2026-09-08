@@ -11,6 +11,7 @@ import { generateCallReview } from "./callReview.js";
 import { callGhlMcpTool } from "./ghlMcpClient.js";
 import { backfillOpportunityBudget, findEmptyBuyerPipelineOpportunity, writeOpportunityBudget, buildBudgetExtractionInstructions } from "./budgetBackfill.js";
 import { runBudgetExtraction } from "./reportEngine.js";
+import { postDigestToGhlWebhook } from "./ghlDigestWebhook.js";
 import { generateNoShowFollowup } from "./noShowFollowup.js";
 import { formatCollectedAlerts } from "./leadershipDigest.js";
 import { generateBrokerPerformanceReview } from "./brokerPerformanceReview.js";
@@ -304,6 +305,7 @@ async function runMorningDigestSequence() {
         : text;
 
       await sendWhatsAppMessage(person.phone, fullText);
+      await postDigestToGhlWebhook(person.name, person.phone, fullText);
       logExchange({
         phone: person.phone,
         name: person.name,
@@ -332,6 +334,7 @@ async function runMorningDigestSequence() {
       console.log(`Generating morning digest for leadership ${person.name} (${person.phone})...`);
       const { text } = await generateMorningDigest(person);
       await sendWhatsAppMessage(person.phone, text);
+      await postDigestToGhlWebhook(person.name, person.phone, text);
       logExchange({
         phone: person.phone,
         name: person.name,
