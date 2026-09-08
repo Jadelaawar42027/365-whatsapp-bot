@@ -626,6 +626,10 @@ app.post("/trigger/call-review", async (req, res) => {
       console.log(`Generating call review for ${identity.name} on contact ${contactName || contactId}...`);
       const review = await generateCallReview(identity, contactId, contactName || "this lead");
       await sendWhatsAppMessage(identity.phone, review.text);
+      // Reuses the same GHL webhook/workflow as the digest relay (postDigestToGhlWebhook) -
+      // the GHL side just relays whatever text arrives to whatever phone arrives, so this
+      // works for any message type without needing a second webhook or workflow.
+      await postDigestToGhlWebhook(identity.name, identity.phone, review.text);
       logExchange({
         phone: identity.phone,
         name: identity.name,
