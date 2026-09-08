@@ -25,7 +25,7 @@
 
 export const BROKER_ROSTER = {
   // --- Leadership: full access to everything ---
-  '19548925215': { name: 'Aj El Aawar', role: 'leadership', slack: 'U046DS14XJA' },
+  '34645496611': { name: 'Aj El Aawar', role: 'leadership', slack: 'U046DS14XJA' },
   '15614459241': { name: 'Shelly Melcher', role: 'leadership' },
   '12244278061': { name: 'Max Sereda', role: 'leadership' },
 
