@@ -148,7 +148,15 @@ current date from anything else.`;
     // review, which loops every broker) pass a higher maxTokens.
     max_tokens: maxTokens,
     system: [
-      { type: "text", text: staticBlock, cache_control: { type: "ephemeral" } },
+      // 1-hour TTL, not the 5-minute default - confirmed via real [cost] log data that the
+      // 5-minute cache was expiring mid-batch and forcing a fresh (1.25x) write for almost
+      // every person instead of a cheap (0.1x) read, since the TTL clock starts at the
+      // WRITING request and generation time counts against it - a single broker's digest
+      // scan routinely takes several minutes, so by person 3-4 in the sequential loop the
+      // cache from person 1 had already expired. 1-hour writes cost more (2x vs 1.25x) but
+      // only pay that once per digest run instead of repeatedly - a clear win past the
+      // documented 3-request break-even, and a normal run has 7+ people sharing this block.
+      { type: "text", text: staticBlock, cache_control: { type: "ephemeral", ttl: "1h" } },
       { type: "text", text: userContext },
     ],
     messages: [{ role: "user", content: userTurnText }],
