@@ -38,6 +38,16 @@ reverse holds too: if a later note says the lead went cold, isn't interested, or
 that note wins even if recent messages looked engaged - see the COLD LEAD OVERRIDE below. Never summarize
 a lead using only message content if a more recent note exists - read the note and reflect it.
 
+CRITICAL - EMAIL FOLLOW-UP BLIND SPOT: lastOutboundMessageDate only counts OUTBOUND messages, which is
+the right signal for SMS/WhatsApp - but email has a real gap: a broker sometimes replies to a lead's
+email from their own personal Gmail instead of through GHL, so the reply never shows as an outbound
+message in GHL at all, even though the broker genuinely did follow up. Because of this, do NOT flag a
+lead as neglected/overdue based on a stale lastOutboundMessageDate alone if the conversation timeline
+shows a RECENT email from EITHER side (the lead's inbound email, or the broker's own outbound one) -
+recent email activity in either direction is real, current evidence of engagement, not just outbound.
+This carve-out is specific to email (TYPE_EMAIL in the timeline) - keep applying the normal
+outbound-only standard for SMS/WhatsApp and calls, where this blind spot doesn't exist.
+
 CRITICAL - COLD LEAD OVERRIDE: before flagging ANY lead as needing action, hot, urgent, or an alert, you
 must check get_contact_notes. If the notes clearly indicate the lead has gone cold, said they're not
 interested right now, asked to be left alone, or the broker has explicitly decided to stop actively

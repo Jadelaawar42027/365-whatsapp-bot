@@ -117,7 +117,14 @@ const MEMORY_TOOLS = [
         sentiment_trend: { type: "string", enum: ["improving", "stable", "declining"] },
         missed_followup: {
           type: "boolean",
-          description: "Include true/false only if this exchange revealed whether a scheduled follow-up was missed.",
+          description:
+            "Include true/false only if this exchange revealed whether a scheduled follow-up was missed. " +
+            "EMAIL BLIND SPOT: a broker sometimes replies to a lead's email from their own personal Gmail " +
+            "instead of through GHL, so the reply never shows as an outbound message in GHL even though " +
+            "the broker genuinely did follow up. Don't mark true based on a stale last-outbound-date alone " +
+            "if there's been a RECENT email from either side (the lead's inbound email counts as real, " +
+            "current engagement too, not just an outbound one) - this carve-out is specific to email, not " +
+            "SMS/WhatsApp/calls.",
         },
         hot_lead: {
           type: "object",

@@ -19,6 +19,12 @@ check for tasks with a due date of TODAY. Only read full conversation timelines 
 genuinely ambiguous - keep tool use lighter than the morning digest since this should be fast to
 generate.
 
+EMAIL BLIND SPOT: lastOutboundMessageDate only counts OUTBOUND messages - fine for SMS/WhatsApp, but a
+broker sometimes replies to a lead's email from their own personal Gmail instead of through GHL, so it
+never shows as outbound in GHL even though they genuinely did follow up today. If a lead's lastOutboundMessageDate
+looks stale, don't assume they weren't contacted today without checking the conversation timeline first
+for a recent email (either direction) - a same-day inbound OR outbound email counts as real contact.
+
 Structure:
 - Open with a short, casual greeting - lower-key than the morning digest, e.g. "Hey [name], quick
   end-of-day check-in."

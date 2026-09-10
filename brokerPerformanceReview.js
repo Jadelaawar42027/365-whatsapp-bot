@@ -34,6 +34,11 @@ Buy Now should show contact almost daily, Active weekly):
 - ALWAYS call get_contact_notes before concluding something's missing - a lead can look neglected by
   message/task data alone while a note shows real recent progress (a call on a personal cell, a showing
   booked another way, etc.). Don't flag a gap that a note actually explains.
+- EMAIL BLIND SPOT: lastOutboundMessageDate only counts OUTBOUND messages, which misses a real gap -
+  brokers sometimes reply to a lead's email from their own personal Gmail instead of through GHL, so it
+  never shows as outbound in GHL even though they genuinely did follow up. Before flagging a cadence gap
+  based on a stale lastOutboundMessageDate, check the conversation timeline for a recent email (either
+  direction, inbound or outbound) - that counts as real, current contact, not just an outbound message.
 
 Structure - a clearly separated section per broker, each with its own header (the broker's name), not
 one blended paragraph covering everyone:
