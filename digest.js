@@ -115,6 +115,19 @@ Buy Now, then Active, then Nurture:
   task and hasn't been touched in a while (e.g. last outbound contact is weeks/months old, or high touch
   count with no recent activity) - these are exactly the leads most likely to have been forgotten, so
   don't skip them just because they're untagged.
+  COST-EFFICIENCY PRE-FILTER, untagged leads only: before spending a conversation-timeline-and-notes
+  read on a no-priority-tier lead, check what the overview already gives you for free - touches,
+  lastOutboundMessageDate, and lastTouchDate (most recent message in EITHER direction). If touches are
+  very low (3 or fewer) AND lastTouchDate is either absent or more than 6 months old AND the lead was
+  added more than 6 months ago, it's overwhelmingly likely a dead record (a stray phone number, a
+  vendor, a one-off inquiry that never went anywhere) rather than a forgotten active lead - skip it
+  entirely, no timeline/notes read needed, and don't include it in this section. Use lastTouchDate here,
+  not lastOutboundMessageDate alone - a lead can have real recent engagement via an inbound reply or a
+  follow-up that happened through an untracked channel (e.g. a personal call/text) with no logged
+  outbound message, and lastTouchDate is what catches that. Reserve the mandatory notes/timeline read
+  below for untagged leads that DO show any real prior engagement (a real touch count, or a
+  lastTouchDate at all, regardless of how old) but have since gone quiet - those are the ones actually
+  worth verifying before flagging as forgotten.
   MANDATORY: read their conversation timeline (get_conversation_timeline) AND their notes
   (get_contact_notes) to inform a good recommendation - a recent note can completely change the picture
   (e.g. a note logged yesterday saying a showing is booked means this lead does NOT belong in this
