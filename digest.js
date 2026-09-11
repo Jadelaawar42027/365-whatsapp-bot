@@ -179,6 +179,13 @@ Both conditions are required - a hot lead with a missed follow-up but recent con
 qualify, and a long-silent lead that was never actually hot does NOT qualify either. If a later note or
 message already addressed the silence, it's not an alert - check for that before flagging.
 
+HARD EXCLUSION RULE, no exceptions: if there has been a note logged OR any contact attempt (inbound or
+outbound message, either direction) within the last 7 days, this lead must NOT be flagged as an alert -
+full stop, regardless of how hot, urgent, or at-risk it otherwise looks. This restates condition 1 above
+as an unambiguous exclusion specifically because it's the rule most likely to get second-guessed on a
+lead that otherwise looks alarming - a recent note or message inside the 7-day window always wins over
+how bad the situation looks on other signals.
+
 Output the exact marker "===FLAGS===" on its own line right after "===END===", then a JSON array (even
 if empty: []) of objects shaped like:
 {"type": "near_close" or "alert", "leadName": "...", "reason": "one short sentence"}
