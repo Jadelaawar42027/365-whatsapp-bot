@@ -67,34 +67,35 @@ function sleep(ms) {
 export async function postDigestToGhlWebhook(brokerName, phone, digestText) {
   const recipient = getIdentityForPhone(phone);
   const recipientName = recipient ? recipient.name : brokerName;
-  if (NEVER_SMS_NAMES.has(recipientName)) {
-    console.log(`SMS relay: skipping - ${recipientName}'s phone is excluded from SMS entirely.`);
-    return;
-  }
 
-  const url = process.env.GHL_DIGEST_SMS_WEBHOOK_URL;
-  if (!url) {
-    console.warn("GHL_DIGEST_SMS_WEBHOOK_URL not set - skipping SMS digest relay for", brokerName);
-    return;
-  }
-
-  // Pulled from the same roster lookup already done above for the exclusion check - not a new
+  // Pulled from the same roster lookup used for the SMS exclusion check below - not a new
   // parameter, so every existing call site picks this up automatically. undefined (omitted from
   // the JSON body) for anyone without a real GHL user account on file (see brokerRoster.js) -
   // never send a guessed/fabricated email.
   const email = recipient?.email;
 
-  const parts = splitForSms(digestText);
-  for (let i = 0; i < parts.length; i++) {
-    try {
-      await axios.post(url, { brokerName, phone, email, digestText: parts[i] });
-      console.log(`Digest relayed to GHL webhook for SMS (${brokerName})${parts.length > 1 ? ` [part ${i + 1}/${parts.length}]` : ""}.`);
-    } catch (err) {
-      console.error(`Failed to relay digest to GHL webhook for ${brokerName}${parts.length > 1 ? ` [part ${i + 1}/${parts.length}]` : ""}:`, err.response?.data || err.message);
+  // Scoped to the SMS send only - NEVER_SMS_NAMES must not also skip the email send further
+  // down, or Aj/Karim would silently get neither channel instead of just SMS.
+  if (NEVER_SMS_NAMES.has(recipientName)) {
+    console.log(`SMS relay: skipping - ${recipientName}'s phone is excluded from SMS entirely.`);
+  } else {
+    const url = process.env.GHL_DIGEST_SMS_WEBHOOK_URL;
+    if (!url) {
+      console.warn("GHL_DIGEST_SMS_WEBHOOK_URL not set - skipping SMS digest relay for", brokerName);
+    } else {
+      const parts = splitForSms(digestText);
+      for (let i = 0; i < parts.length; i++) {
+        try {
+          await axios.post(url, { brokerName, phone, email, digestText: parts[i] });
+          console.log(`Digest relayed to GHL webhook for SMS (${brokerName})${parts.length > 1 ? ` [part ${i + 1}/${parts.length}]` : ""}.`);
+        } catch (err) {
+          console.error(`Failed to relay digest to GHL webhook for ${brokerName}${parts.length > 1 ? ` [part ${i + 1}/${parts.length}]` : ""}:`, err.response?.data || err.message);
+        }
+        // Small gap between parts so they arrive in order, same reasoning as whatsapp.js's
+        // between-chunk delay.
+        if (i < parts.length - 1) await sleep(500);
+      }
     }
-    // Small gap between parts so they arrive in order, same reasoning as whatsapp.js's
-    // between-chunk delay.
-    if (i < parts.length - 1) await sleep(500);
   }
 
   await postDigestEmail(brokerName, email, digestText);
