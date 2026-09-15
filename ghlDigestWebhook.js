@@ -1,10 +1,11 @@
-// Relays the morning digest to a GHL workflow via webhook, which is expected to route it to
-// the right broker (by name or phone, whichever the workflow's If/Else branches key off) and
-// send it as SMS - see server.js's runMorningDigestSequence. This runs ALONGSIDE the existing
-// WhatsApp digest send, not instead of it - a same-content backup, since WhatsApp's
-// per-recipient MARKETING-template engagement throttle has caused real delivery failures for
-// most of the team (see the "starter"/daily_activation_personalized template history), and
-// SMS has no equivalent restriction.
+// Relays the morning digest to GHL via webhook(s), which are expected to route it to the right
+// broker and send it - see server.js's runMorningDigestSequence. This runs ALONGSIDE the existing
+// WhatsApp digest send, not instead of it - a same-content backup, since WhatsApp's per-recipient
+// MARKETING-template engagement throttle has caused real delivery failures for most of the team
+// (see the "starter"/daily_activation_personalized template history), and neither SMS nor email
+// has an equivalent restriction. Two separate webhooks/workflows: one sends SMS (chunked to fit
+// the 1600-char limit), the other sends email (full text, single block, no limit) - see
+// postDigestToGhlWebhook and postDigestEmail below.
 import axios from "axios";
 import { getIdentityForPhone } from "./brokerRoster.js";
 
@@ -94,5 +95,41 @@ export async function postDigestToGhlWebhook(brokerName, phone, digestText) {
     // Small gap between parts so they arrive in order, same reasoning as whatsapp.js's
     // between-chunk delay.
     if (i < parts.length - 1) await sleep(500);
+  }
+
+  await postDigestEmail(brokerName, email, digestText);
+}
+
+/**
+ * Separate webhook -> separate GHL workflow that sends the digest as an EMAIL instead of SMS.
+ * Independent of the SMS send above: no character limit and never split into parts (email has no
+ * equivalent length restriction, and splitting a written digest into "(1/3)"-style fragments would
+ * just be worse to read in an inbox). Also independent of NEVER_SMS_NAMES - that exclusion is
+ * specifically about SMS cost/annoyance for Aj/Karim, not about withholding the digest itself, so
+ * it does not apply here. No-op if the recipient has no email on file (see brokerRoster.js), or if
+ * GHL_DIGEST_EMAIL_WEBHOOK_URL isn't configured yet.
+ */
+async function postDigestEmail(brokerName, email, digestText) {
+  if (!email) {
+    console.log(`Email relay: skipping - no email on file for ${brokerName}.`);
+    return;
+  }
+
+  const url = process.env.GHL_DIGEST_EMAIL_WEBHOOK_URL;
+  if (!url) {
+    console.warn("GHL_DIGEST_EMAIL_WEBHOOK_URL not set - skipping email digest relay for", brokerName);
+    return;
+  }
+
+  try {
+    await axios.post(url, {
+      brokerName,
+      email,
+      subject: `${brokerName} - Morning Digest`,
+      digestText,
+    });
+    console.log(`Digest relayed to GHL webhook for email (${brokerName}).`);
+  } catch (err) {
+    console.error(`Failed to relay digest to GHL email webhook for ${brokerName}:`, err.response?.data || err.message);
   }
 }
