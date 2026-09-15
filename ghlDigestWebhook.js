@@ -77,10 +77,16 @@ export async function postDigestToGhlWebhook(brokerName, phone, digestText) {
     return;
   }
 
+  // Pulled from the same roster lookup already done above for the exclusion check - not a new
+  // parameter, so every existing call site picks this up automatically. undefined (omitted from
+  // the JSON body) for anyone without a real GHL user account on file (see brokerRoster.js) -
+  // never send a guessed/fabricated email.
+  const email = recipient?.email;
+
   const parts = splitForSms(digestText);
   for (let i = 0; i < parts.length; i++) {
     try {
-      await axios.post(url, { brokerName, phone, digestText: parts[i] });
+      await axios.post(url, { brokerName, phone, email, digestText: parts[i] });
       console.log(`Digest relayed to GHL webhook for SMS (${brokerName})${parts.length > 1 ? ` [part ${i + 1}/${parts.length}]` : ""}.`);
     } catch (err) {
       console.error(`Failed to relay digest to GHL webhook for ${brokerName}${parts.length > 1 ? ` [part ${i + 1}/${parts.length}]` : ""}:`, err.response?.data || err.message);

@@ -25,23 +25,34 @@
 
 export const BROKER_ROSTER = {
   // --- Leadership: full access to everything ---
-  '34645496611': { name: 'Aj El Aawar', role: 'leadership', slack: 'U046DS14XJA' },
+  // "email" is each person's real GHL user email (from list_brokers) - used to enrich the
+  // GHL digest/SMS webhook payload (see server.js). Shelly has no corresponding GHL user
+  // account at all (confirmed via list_brokers - same situation as Peter Shaarda below), so
+  // there's no real email to give her; leave unset rather than guessing one.
+  '34645496611': { name: 'Aj El Aawar', role: 'leadership', slack: 'U046DS14XJA', email: 'aj@365yachts.org' },
   '15614459241': { name: 'Shelly Melcher', role: 'leadership' },
-  '12244278061': { name: 'Max Sereda', role: 'leadership' },
+  '12244278061': { name: 'Max Sereda', role: 'leadership', email: 'sereda.maksim95@gmail.com' },
 
   // --- Brokers: restricted to their own contacts/deals only ---
-  '17725384547': { name: 'Nicolette Cervone', role: 'broker' },
-  '16159483641': { name: 'Charlie Seitz', role: 'broker' },
-  '17152203264': { name: 'James Klier', role: 'broker' },
-  '17542074504': { name: 'Cheryl Hazel', role: 'broker' },
-  '17812582070': { name: 'Martin Herbert-Burns', role: 'broker' },
-  '19788268166': { name: 'Joseph Graffeo', role: 'broker' },
+  '17725384547': { name: 'Nicolette Cervone', role: 'broker', email: 'Nicolette@365yachts.org' },
+  '16159483641': { name: 'Charlie Seitz', role: 'broker', email: 'Charlie@365yachts.org' },
+  '17152203264': { name: 'James Klier', role: 'broker', email: 'James@365yachts.org' },
+  '17542074504': { name: 'Cheryl Hazel', role: 'broker', email: 'Cheryl@365yachts.org' },
+  '17812582070': { name: 'Martin Herbert-Burns', role: 'broker', email: 'martin@365yachts.org' },
+  '19788268166': { name: 'Joseph Graffeo', role: 'broker', email: 'Joseph@365yachts.org' },
+  // Peter Shaarda: no corresponding GHL user account either (confirmed via list_brokers) -
+  // no real email to give him, still an open question from the recurring digest-failure
+  // investigation (does he have a GHL account under a different name/email, or should he
+  // come out of this roster?).
   '12394041441': { name: 'Peter Shaarda', role: 'broker' },
-  '19806221398': { name: 'Alex Siegers', role: 'broker' },
-  '15612608388': { name: 'David Pattinson', role: 'broker' },
+  // GHL's own user record is "Alex Siegars" (note the spelling) - the email is unambiguous
+  // either way, kept here under the roster's existing spelling.
+  '19806221398': { name: 'Alex Siegers', role: 'broker', email: 'Alex@365yachts.org' },
+  '15612608388': { name: 'David Pattinson', role: 'broker', email: 'David@365yachts.org' },
 
   // --- Setters: outbound qualification/booking, own separate knowledge base ---
-  '48697713899': { name: 'Karim El Timani', role: 'leadership', slack: 'U05HD0984TU' },
+  // GHL's own user record is "Karim Timani" (no "El") - the email is unambiguous either way.
+  '48697713899': { name: 'Karim El Timani', role: 'leadership', slack: 'U05HD0984TU', email: 'karim@365yachts.org' },
 };
 
 /**
