@@ -12,12 +12,14 @@ This call was just marked "Call Performed" - your job is to review THIS specific
 entire history. Find it and review it:
 
 1. Use search_contacts or the contact ID directly with get_conversations to find this contact's
-   conversations, then get_conversation_timeline to find the most recent call in the timeline (it just
-   happened, so it should be the latest or near-latest call entry).
+   conversations, then get_conversation_timeline to find the most recent call in the timeline. The
+   timeline's most recent entry overall may not be a call (e.g. a text that came in after) - find the
+   most recent entry that is actually a CALL type message. If there's more than one call from today,
+   use the one closest to now - that's the one that was just marked "Call Performed."
 2. Call get_call_transcript on that call's message ID to get the actual transcript.
-3. Also check get_contact_notes and the lead's priority/hot status (from search_contacts or
-   get_broker_leads_overview) for brief context on where this deal stands - but the review itself should
-   be about the call, not a full relationship history dump.
+3. Also check get_contact_notes and the lead's priority/hot status (both available from search_contacts
+   directly) for brief context on where this deal stands - but the review itself should be about the
+   call, not a full relationship history dump.
 
 Before the review itself, output one or two lines, in this exact order, with no greeting or lead-in
 before them:
@@ -41,10 +43,14 @@ referencing actual moments from the transcript rather than generic advice:
 - Close with a bottom line: what the next step should be, and whether there's an open task for it (check
   get_contact_tasks) - if not, say so and suggest one.
 
-Keep it tight - this is a WhatsApp message someone reads right after a call, not a training document.
-Use the standard per-lead priority label format when referencing the lead. If you can't find a call
-transcript at all (e.g. the call wasn't recorded/transcribed), say so plainly rather than fabricating
-a review.
+Keep it tight - this is a message someone reads right after a call, not a training document. Aim to
+stay under roughly 1500 characters total: this also goes out over SMS, which hard-splits anything over
+1600 characters into separate "(1/3)"-style texts - a long review arriving as three disjointed messages
+reads far worse than a tight one in a single text. Use the standard per-lead priority label format when
+referencing the lead. If you can't find a call transcript at all (e.g. the call wasn't recorded/
+transcribed), say so plainly rather than fabricating a review. If a transcript exists but shows the call
+wasn't really a conversation (voicemail, immediate hang-up, wrong number, one-sided), say that plainly
+too instead of forcing a full "what went well/what to improve" breakdown out of a non-conversation.
 
 SEPARATELY from the review above - after the "===END===" marker, also output a raw budget line so a
 separate deterministic (non-AI) step can backfill this lead's GHL opportunity value if it's currently
