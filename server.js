@@ -17,7 +17,7 @@ import { formatCollectedAlerts } from "./leadershipDigest.js";
 import { generateBrokerPerformanceReview } from "./brokerPerformanceReview.js";
 import { transcribeWhatsAppVoiceNote } from "./voiceTranscription.js";
 import { checkDbConnection } from "./db/pool.js";
-import { getStaleMissedFollowups } from "./db/followupEvents.js";
+import { getStaleMissedFollowups, resolveFollowupsWithLiveActivity } from "./db/followupEvents.js";
 
 const app = express();
 // verify captures the exact raw request bytes onto req.rawBody, alongside
@@ -277,6 +277,41 @@ function formatStaleFollowupNote(items) {
 }
 
 /**
+ * Closes out any "missed follow-up" flags that real GHL activity has since overtaken, before
+ * the digest escalates them - see db/followupEvents.js's resolveFollowupsWithLiveActivity for
+ * why this is needed: the memory layer only learns about a contact through a live chat
+ * exchange, so a flag raised via chat stays open forever if the broker's actual follow-up work
+ * (a direct call, a text from their own phone, a GHL note logged by hand) never goes through
+ * another chat turn. Deterministic, no Claude involved - just get_broker_leads_overview (via
+ * brokerDirectory, resolved once per run) and a DB write. Fails safe: a lookup/write failure
+ * here only skips reconciliation for this person, never breaks their digest send.
+ * @param {{name: string, phone: string}} person
+ */
+async function reconcileStaleFollowups(person) {
+  try {
+    const identity = { name: person.name, role: "broker" };
+    // list_brokers is cached 5 minutes server-side (brokerResolver.js) - calling it per-broker
+    // here is cheap, at most one real hit per digest run, the rest ride the cache.
+    const brokerDirectory = await callGhlMcpTool(identity, "list_brokers", {});
+    const directoryEntry = brokerDirectory.find(
+      (b) => b.name.trim().toLowerCase() === person.name.trim().toLowerCase()
+    );
+    if (!directoryEntry) {
+      console.warn(`Stale-followup reconciliation: no GHL user match for ${person.name} - skipping.`);
+      return;
+    }
+    const leads = await callGhlMcpTool(identity, "get_broker_leads_overview", { brokerId: directoryEntry.id }, 180000);
+    const contactTouchDates = (leads || []).map((lead) => ({ contactId: lead.id, lastTouchDate: lead.lastTouchDate }));
+    const resolvedCount = await resolveFollowupsWithLiveActivity({ role: "broker", brokerId: person.phone }, contactTouchDates);
+    if (resolvedCount > 0) {
+      console.log(`Stale-followup reconciliation: auto-resolved ${resolvedCount} flag(s) for ${person.name} (live activity since they were raised).`);
+    }
+  } catch (err) {
+    console.error(`Stale-followup reconciliation failed for ${person.name}:`, err.message);
+  }
+}
+
+/**
  * Morning digest run: brokers first (each digest generation also extracts
  * "leadership flags" - near-close deals, alerts - in the SAME Claude call,
  * no extra scan), THEN leadership last: their own personal digest, followed
@@ -303,6 +338,10 @@ async function runMorningDigestSequence() {
       // Memory-layer check, AFTER the digest's own hot-leads-first report is
       // already built - appended to the end of their text, never reordered
       // into it, so it always lands after hot leads for this same person.
+      // Reconcile first: closes out any "missed" flag that real GHL activity
+      // has since overtaken, so the note below only ever escalates flags that
+      // are still genuinely open.
+      await reconcileStaleFollowups(person);
       const staleFollowups = await getStaleMissedFollowups({ role: "broker", brokerId: person.phone });
       const fullText = staleFollowups.length > 0
         ? `${text}\n\n${formatStaleFollowupNote(staleFollowups)}`
