@@ -652,6 +652,26 @@ app.post("/trigger/call-review", async (req, res) => {
 
   (async () => {
     try {
+      // Deterministic check, no Claude - GHL's "Call Performed" outcome can get set even when
+      // the broker actually called off-CRM (their personal cell, never logged), in which case
+      // there's no call record here to review at all. Catching this before generateCallReview
+      // saves the Claude call AND avoids a review built on the wrong/no transcript.
+      const callCheck = await callGhlMcpTool(identity, "has_outbound_call_record", { contactId });
+      if (!callCheck?.hasCall) {
+        const offCrmMessage = `Can't review ${contactName || "this lead"}'s call — no outbound call is logged in the CRM for them, so it looks like this call was done off-CRM.`;
+        console.log(`Call review skipped for ${identity.name} on contact ${contactName || contactId}: no outbound call record (off-CRM).`);
+        await sendWhatsAppMessage(identity.phone, offCrmMessage);
+        await postDigestToGhlWebhook(identity.name, identity.phone, offCrmMessage);
+        logExchange({
+          phone: identity.phone,
+          name: identity.name,
+          role: identity.role,
+          direction: "outgoing",
+          message: `[CALL REVIEW SKIPPED - OFF-CRM - ${contactName || contactId}]\n${offCrmMessage}`,
+        });
+        return;
+      }
+
       console.log(`Generating call review for ${identity.name} on contact ${contactName || contactId}...`);
       const review = await generateCallReview(identity, contactId, contactName || "this lead");
       await sendWhatsAppMessage(identity.phone, review.text);
