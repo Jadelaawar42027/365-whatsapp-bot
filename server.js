@@ -18,6 +18,7 @@ import { generateBrokerPerformanceReview } from "./brokerPerformanceReview.js";
 import { transcribeWhatsAppVoiceNote } from "./voiceTranscription.js";
 import { checkDbConnection } from "./db/pool.js";
 import { getStaleMissedFollowups, resolveFollowupsWithLiveActivity } from "./db/followupEvents.js";
+import { runBackfill, syncDay, getSetterActivity, parisDay, msUntilNextParisEndOfDay } from "./setterActivitySync.js";
 
 const app = express();
 // verify captures the exact raw request bytes onto req.rawBody, alongside
@@ -909,8 +910,45 @@ app.post("/trigger/leadership-digest", (req, res) => {
   })();
 });
 
+// ---------------------------------------------------------------------------
+// 6) Setter activity (dials + unique contacts per setter per day). Historical backfill is
+//    triggered once manually; the daily job runs itself at 23:59:59 Europe/Paris.
+// ---------------------------------------------------------------------------
+app.post("/trigger/setter-activity-backfill", async (req, res) => {
+  if (!requireTriggerAuth(req, res)) return;
+  res.status(202).json({ status: "accepted" });
+  runBackfill().catch((err) => console.error("Setter activity backfill failed:", err.message));
+});
+
+app.get("/trigger/setter-activity", async (req, res) => {
+  if (!requireTriggerAuth(req, res)) return;
+  const start = String(req.query.start || "");
+  const end = String(req.query.end || "");
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(start) || !/^\d{4}-\d{2}-\d{2}$/.test(end)) {
+    return res.status(400).json({ error: "start and end must be YYYY-MM-DD" });
+  }
+  try {
+    res.json({ rows: await getSetterActivity({ start, end }) });
+  } catch (err) {
+    console.error("Setter activity read failed:", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+function scheduleDailySetterSync() {
+  setTimeout(async () => {
+    try {
+      await syncDay(parisDay(Date.now()));
+    } catch (err) {
+      console.error("Daily setter activity sync failed:", err.message);
+    }
+    scheduleDailySetterSync();
+  }, msUntilNextParisEndOfDay());
+}
+
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`Server listening on port ${PORT}`);
   checkDbConnection(); // logs success/failure - doesn't block startup, WhatsApp/Slack don't depend on it
+  scheduleDailySetterSync();
 });
