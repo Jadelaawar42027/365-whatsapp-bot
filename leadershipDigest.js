@@ -19,6 +19,13 @@
  *   from db/followupEvents.js's getStaleMissedFollowups - missed follow-ups still unresolved 7+ days after being flagged
  * @returns {string}
  */
+// Standing hot buyers listed in every team summary regardless of today's flags - leadership
+// asked for these to stay visible continuously, not only when a digest happens to flag them.
+// Summary-only: no individual digest is sent for them.
+const STANDING_HOT_BUYERS = [
+  { name: "Anton Swiss Buyer", assignedTo: "Shelly" },
+];
+
 export function formatCollectedAlerts(flaggedItems, greetingName, staleFollowups = []) {
   const nearClose = flaggedItems.filter((f) => f.type === "near_close");
   const alerts = flaggedItems.filter((f) => f.type === "alert");
@@ -27,9 +34,15 @@ export function formatCollectedAlerts(flaggedItems, greetingName, staleFollowups
   lines.push(`Hey ${greetingName}, here's today's team summary 👇`);
   lines.push("");
 
+  lines.push("🔥 *Hot buyers (standing)*");
+  for (const buyer of STANDING_HOT_BUYERS) {
+    lines.push(`- ${buyer.name} (${buyer.assignedTo})`);
+  }
+  lines.push("");
+
   if (nearClose.length === 0 && alerts.length === 0 && staleFollowups.length === 0) {
-    lines.push("Nothing flagged today — no near-close deals and no alerts across the team.");
-    return lines.join("\n");
+    lines.push("Nothing else flagged today — no near-close deals and no alerts across the team.");
+    return lines.join("\n").trim();
   }
 
   if (nearClose.length > 0) {
