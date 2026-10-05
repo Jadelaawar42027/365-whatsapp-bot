@@ -19,6 +19,7 @@ import { transcribeWhatsAppVoiceNote } from "./voiceTranscription.js";
 import { checkDbConnection } from "./db/pool.js";
 import { getStaleMissedFollowups, resolveFollowupsWithLiveActivity } from "./db/followupEvents.js";
 import { runBackfill, syncDay, getSetterActivity, parisDay, msUntilNextParisEndOfDay } from "./setterActivitySync.js";
+import { handleSmsButtonReply } from "./smsDrafts.js";
 
 const app = express();
 // verify captures the exact raw request bytes onto req.rawBody, alongside
@@ -118,6 +119,11 @@ app.post("/webhook", async (req, res) => {
           );
         }
       }
+      return;
+    }
+
+    if (message.type === "interactive" && message.interactive?.type === "button_reply") {
+      await handleSmsButtonReply(message.from, message.interactive.button_reply.id);
       return;
     }
 

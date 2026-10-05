@@ -165,3 +165,29 @@ export async function sendTypingIndicator(messageId) {
     console.error("Failed to send typing indicator (non-fatal):", err.response?.data || err.message);
   }
 }
+/**
+ * Sends a WhatsApp message with up to 3 tappable reply buttons. Button titles are capped at 20
+ * characters by Meta, and the body at 1024.
+ * @param {string} to - recipient's phone number, digits only
+ * @param {string} bodyText
+ * @param {Array<{id: string, title: string}>} buttons
+ */
+export async function sendInteractiveButtons(to, bodyText, buttons) {
+  const url = `https://graph.facebook.com/${GRAPH_API_VERSION}/${process.env.WHATSAPP_PHONE_NUMBER_ID}/messages`;
+  await axios.post(
+    url,
+    {
+      messaging_product: "whatsapp",
+      to,
+      type: "interactive",
+      interactive: {
+        type: "button",
+        body: { text: bodyText },
+        action: {
+          buttons: buttons.map((b) => ({ type: "reply", reply: { id: b.id, title: b.title } })),
+        },
+      },
+    },
+    { headers: { Authorization: `Bearer ${process.env.WHATSAPP_TOKEN}`, "Content-Type": "application/json" } }
+  );
+}

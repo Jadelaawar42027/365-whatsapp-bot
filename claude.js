@@ -2,6 +2,8 @@ import Anthropic from "@anthropic-ai/sdk";
 import { getSystemPrompt, getMasterReferenceText } from "./knowledgeBase.js";
 import { mintIdentityToken } from "./identity.js";
 import { getContactMemory, upsertContactMemory } from "./db/contactsMemory.js";
+import { SMS_DRAFTING_GUIDE } from "./smsDraftStyle.js";
+import { checkOptions, createDraftSet, presentDrafts } from "./smsDrafts.js";
 import { insertInteractionLog, getRecentInteractions } from "./db/interactionLog.js";
 import { insertHotLead } from "./db/hotLeads.js";
 import { insertFollowupEvent } from "./db/followupEvents.js";
@@ -70,6 +72,7 @@ const MAX_TOOL_ITERATIONS_ADMIN = 25;
 // the MCP ones which Anthropic resolves server-side before the response
 // ever reaches us.
 const MEMORY_TOOL_NAMES = new Set(["get_contact_memory", "record_contact_interaction"]);
+const SMS_DRAFT_TOOL_NAMES = new Set(["propose_sms_drafts"]);
 const MEMORY_TOOLS = [
   {
     name: "get_contact_memory",
@@ -138,7 +141,55 @@ const MEMORY_TOOLS = [
       required: ["contact_id", "summary"],
     },
   },
+  {
+    name: "propose_sms_drafts",
+    description:
+      "Draft 1-3 follow-up SMS options for a specific lead and send them to the broker as tappable buttons. " +
+      "Nothing is texted to the lead by this tool - the broker picks an option and confirms first. Use this " +
+      "when asked to draft or brainstorm follow-up texts for a lead. Each option must follow these rules, and " +
+      "rejected options come back with the reason so you can rewrite them:\n\n" + SMS_DRAFTING_GUIDE,
+    input_schema: {
+      type: "object",
+      properties: {
+        contact_id: { type: "string", description: "The GHL contact ID of the lead, from search_contacts" },
+        contact_name: { type: "string", description: "The lead's name, for the broker's confirmation message" },
+        options: {
+          type: "array",
+          minItems: 1,
+          maxItems: 3,
+          items: { type: "string" },
+          description: "1-3 distinct SMS texts, each under 320 characters, each with a different angle",
+        },
+      },
+      required: ["contact_id", "contact_name", "options"],
+    },
+  },
 ];
+
+/**
+ * Executes propose_sms_drafts: rejects any option that breaks the style rules (so the model
+ * rewrites it), otherwise stores the drafts and sends the broker the options as buttons. Never
+ * sends anything to the lead - that only happens later through the broker's own button tap.
+ */
+async function executeSmsDraftTool(block, caller) {
+  const { contact_id: contactId, contact_name: contactName, options } = block.input;
+  const failures = checkOptions(options);
+  if (failures) {
+    return JSON.stringify({
+      ok: false,
+      message: "Some options break the rules. Rewrite them and call this tool again with all options.",
+      failures: failures.map((f) => ({ option: f.index + 1, problems: f.problems })),
+    });
+  }
+  try {
+    const draftId = await createDraftSet({ brokerPhone: caller.brokerId, contactId, contactName, options });
+    await presentDrafts({ brokerPhone: caller.brokerId, contactName, draftId, options });
+    return JSON.stringify({ ok: true, message: "Options sent to the broker as buttons. Nothing has been texted to the lead." });
+  } catch (err) {
+    console.error("propose_sms_drafts failed:", err.message);
+    return JSON.stringify({ ok: false, message: "Could not save or send the drafts this turn. Tell the broker and don't retry." });
+  }
+}
 
 /**
  * Executes one memory-tool call. Permission enforcement happens entirely
@@ -572,7 +623,7 @@ current date from anything else.`;
     if (response.stop_reason !== "tool_use") break;
 
     const toolUseBlocks = response.content.filter(
-      (block) => block.type === "tool_use" && MEMORY_TOOL_NAMES.has(block.name)
+      (block) => block.type === "tool_use" && (MEMORY_TOOL_NAMES.has(block.name) || SMS_DRAFT_TOOL_NAMES.has(block.name))
     );
     if (toolUseBlocks.length === 0) {
       const unhandledNames = response.content
@@ -589,7 +640,9 @@ current date from anything else.`;
       toolUseBlocks.map(async (block) => ({
         type: "tool_result",
         tool_use_id: block.id,
-        content: await executeMemoryTool(block, caller, channel),
+        content: SMS_DRAFT_TOOL_NAMES.has(block.name)
+          ? await executeSmsDraftTool(block, caller)
+          : await executeMemoryTool(block, caller, channel),
       }))
     );
     turnMessages.push({ role: "user", content: toolResults });
