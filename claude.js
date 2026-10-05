@@ -461,7 +461,12 @@ current date from anything else.`;
         "that concerned a specific resolved contact."
       : "";
 
-    userContext = `${dateContext}\n\nCURRENT USER: ${identity.name}, role: ${identity.role}. ` +
+    const suggestionNote = channel === "whatsapp"
+      ? "\n\nSUGGESTED REPLIES: end every reply with this block, nothing after it:\n===SUGGESTIONS===\n" +
+        "Suggestion one\nSuggestion two\n" +
+        "Each suggestion is a 1-3 word reply the person can tap to send back to you, written the way they would say it (e.g. Yes, Not yet, Show me more, Schedule it). Give 2 or 3, each under 20 characters, one per line, no numbers, no bullets, no punctuation."
+      : "";
+    userContext = `${dateContext}\n\nCURRENT USER: ${identity.name}, role: ${identity.role}. ` + suggestionNote +
       accessDescription + setterNote + consultantNote + memoryNote;
 
     // Master reference doc - tens of thousands of tokens, so it's fetched and
@@ -731,6 +736,25 @@ current date from anything else.`;
  * @param {'whatsapp'|'slack'|'sms'} message.channel - which channel this came in on - varies the system prompt's FORMATTING section (WhatsApp markup vs. plain SMS text), see knowledgeBase.js's getSystemPrompt
  * @returns {Promise<string>} reply text
  */
+const SUGGESTIONS_MARKER = "===SUGGESTIONS===";
+const SUGGESTION_MAX_CHARS = 20;
+const SUGGESTION_MAX_COUNT = 3;
+
+// Splits the model's trailing ===SUGGESTIONS=== block off a reply. Anything that doesn't fit the
+// button rules (over 20 characters, more than 3) is dropped rather than sent half-cut.
+export function splitSuggestions(reply) {
+  const idx = reply.indexOf(SUGGESTIONS_MARKER);
+  if (idx === -1) return { text: reply.trim(), suggestions: [] };
+  const text = reply.slice(0, idx).trim();
+  const suggestions = reply
+    .slice(idx + SUGGESTIONS_MARKER.length)
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line && line.length <= SUGGESTION_MAX_CHARS)
+    .slice(0, SUGGESTION_MAX_COUNT);
+  return { text, suggestions };
+}
+
 export async function handleIncomingMessage({ userId, identity, text, channel }) {
   return askClaude(userId, text, identity, channel);
 }

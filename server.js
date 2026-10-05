@@ -1,7 +1,7 @@
 import "dotenv/config";
 import express from "express";
-import { sendWhatsAppMessage, sendTypingIndicator, sendTemplateMessage } from "./whatsapp.js";
-import { handleIncomingMessage, markTemplateSent } from "./claude.js";
+import { sendWhatsAppMessage, sendTypingIndicator, sendTemplateMessage, sendInteractiveButtons } from "./whatsapp.js";
+import { handleIncomingMessage, markTemplateSent, splitSuggestions } from "./claude.js";
 import { handleSlackEvent } from "./slack.js";
 import { logExchange } from "./conversationLog.js";
 import { getIdentityForPhone, getIdentityByName, getLeadershipEntries, BROKER_ROSTER } from "./brokerRoster.js";
@@ -122,12 +122,16 @@ app.post("/webhook", async (req, res) => {
       return;
     }
 
-    if (message.type === "interactive" && message.interactive?.type === "button_reply") {
+    const isSuggestionTap =
+      message.type === "interactive" &&
+      message.interactive?.type === "button_reply" &&
+      String(message.interactive.button_reply.id || "").startsWith("suggest:");
+    if (message.type === "interactive" && message.interactive?.type === "button_reply" && !isSuggestionTap) {
       await handleSmsButtonReply(message.from, message.interactive.button_reply.id);
       return;
     }
 
-    if (message.type !== "text" && message.type !== "audio") {
+    if (message.type !== "text" && message.type !== "audio" && !isSuggestionTap) {
       const from = message.from;
       await sendWhatsAppMessage(from, "I can only read text messages or voice notes right now.");
       return;
@@ -165,6 +169,9 @@ app.post("/webhook", async (req, res) => {
     if (message.type === "text") {
       text = message.text.body;
       console.log(`Incoming from ${from}: ${text}`);
+    } else if (isSuggestionTap) {
+      text = message.interactive.button_reply.title;
+      console.log(`Incoming from ${from} (suggested reply): ${text}`);
     } else {
       console.log(`Incoming voice note from ${from}, transcribing...`);
       try {
@@ -187,9 +194,17 @@ app.post("/webhook", async (req, res) => {
       message: text,
     });
 
-    const reply = await handleIncomingMessage({ userId: from, identity, text, channel: "whatsapp" });
+    const rawReply = await handleIncomingMessage({ userId: from, identity, text, channel: "whatsapp" });
     clearInterval(typingInterval);
-    await sendWhatsAppMessage(from, reply);
+    const { text: reply, suggestions } = splitSuggestions(rawReply);
+    if (suggestions.length > 0 && reply && reply.length <= 1024) {
+      await sendInteractiveButtons(from, reply, suggestions.map((s) => ({ id: `suggest:${s}`, title: s })));
+    } else {
+      await sendWhatsAppMessage(from, reply);
+      if (suggestions.length > 0) {
+        await sendInteractiveButtons(from, "Quick replies", suggestions.map((s) => ({ id: `suggest:${s}`, title: s })));
+      }
+    }
 
     logExchange({
       phone: from,
