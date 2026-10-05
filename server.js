@@ -664,6 +664,13 @@ app.post("/trigger/call-review", async (req, res) => {
       // there's no call record here to review at all. Catching this before generateCallReview
       // saves the Claude call AND avoids a review built on the wrong/no transcript.
       const callCheck = await callGhlMcpTool(identity, "has_outbound_call_record", { contactId });
+      const MIN_REVIEWABLE_CALL_SECONDS = 300;
+      const callSeconds = callCheck?.lastCall?.durationSeconds;
+      if (callCheck?.hasCall && typeof callSeconds === "number" && callSeconds < MIN_REVIEWABLE_CALL_SECONDS) {
+        console.log(`Call review skipped for ${identity.name} on contact ${contactName || contactId}: call was ${callSeconds}s, under ${MIN_REVIEWABLE_CALL_SECONDS}s. Nothing sent.`);
+        return;
+      }
+
       if (!callCheck?.hasCall) {
         const offCrmMessage = `Can't review ${contactName || "this lead"}'s call — no outbound call is logged in the CRM for them, so it looks like this call was done off-CRM.`;
         console.log(`Call review skipped for ${identity.name} on contact ${contactName || contactId}: no outbound call record (off-CRM).`);
