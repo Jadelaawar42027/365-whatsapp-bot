@@ -146,7 +146,8 @@ const MEMORY_TOOLS = [
     description:
       "Draft 1-3 follow-up SMS options for a specific lead and send them to the broker as tappable buttons. " +
       "Nothing is texted to the lead by this tool - the broker picks an option and confirms first. Use this " +
-      "when asked to draft or brainstorm follow-up texts for a lead. Each option must follow these rules, and " +
+      "ONLY when the broker's latest message asks you to draft, brainstorm, or write new follow-up texts for a lead. " +
+      "Never call it for a reply like 'cancel', 'don't send', or any comment on drafts already sent. Each option must follow these rules, and " +
       "rejected options come back with the reason so you can rewrite them:\n\n" + SMS_DRAFTING_GUIDE,
     input_schema: {
       type: "object",
@@ -579,6 +580,7 @@ current date from anything else.`;
 
   let response;
   let toolRoundTrips = 0;
+  let smsDraftsPresented = false;
   // Text can legitimately arrive in an EARLIER round, not just the final
   // one - the memory-tool instructions literally tell the model to answer
   // first, THEN call record_contact_interaction "near the end of your
@@ -640,9 +642,12 @@ current date from anything else.`;
       toolUseBlocks.map(async (block) => ({
         type: "tool_result",
         tool_use_id: block.id,
-        content: SMS_DRAFT_TOOL_NAMES.has(block.name)
-          ? await executeSmsDraftTool(block, caller)
-          : await executeMemoryTool(block, caller, channel),
+        content: await (async () => {
+          if (!SMS_DRAFT_TOOL_NAMES.has(block.name)) return executeMemoryTool(block, caller, channel);
+          const result = await executeSmsDraftTool(block, caller);
+          if (JSON.parse(result).ok) smsDraftsPresented = true;
+          return result;
+        })(),
       }))
     );
     turnMessages.push({ role: "user", content: toolResults });
@@ -697,6 +702,10 @@ current date from anything else.`;
   if (!replyText) {
     console.warn(`Reply to ${conversationKey} was empty (stop_reason: ${response.stop_reason}) - substituting a fallback instead of sending nothing.`);
     replyText = "I didn't get a usable answer together for that — try asking again, maybe worded a little differently.";
+  }
+
+  if (smsDraftsPresented) {
+    replyText = "Tap an option above to pick it.";
   }
 
   history.push({ role: "assistant", content: replyText });
