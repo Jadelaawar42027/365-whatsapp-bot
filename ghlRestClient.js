@@ -49,7 +49,7 @@ export async function listConversationsPage({ startAfterDate } = {}) {
 export async function listAllMessages(conversationId) {
   const all = [];
   let lastMessageId;
-  for (;;) {
+  for (let page = 0; page < 20; page++) {
     const data = await ghlGet(`/conversations/${conversationId}/messages`, {
       limit: 100,
       lastMessageId,
