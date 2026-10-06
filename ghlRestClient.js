@@ -69,12 +69,22 @@ export async function getMessageById(messageId) {
 }
 
 // Every user on the location (the roster name -> GHL user ID lookup).
+// /users/search leaves out some active location users (Peter Shaarda and Shelly Melcher both load
+// fine by ID), so those are added explicitly by ID.
+const EXTRA_USER_IDS = ["MBQ0PWk0hNfytP4eoohE", "u4HBNud6rK0HyezX9l1a"];
+
 export async function listLocationUsers() {
   const data = await ghlGet("/users/search", {
     companyId: process.env.GHL_COMPANY_ID,
     locationId: process.env.GHL_LOCATION_ID,
   });
-  return data.users || [];
+  const users = data.users || [];
+  const seen = new Set(users.map((u) => u.id));
+  for (const id of EXTRA_USER_IDS) {
+    if (seen.has(id)) continue;
+    users.push(await ghlGet(`/users/${id}`));
+  }
+  return users;
 }
 
 // Conversations assigned to one GHL user, newest activity first. Used to find emails a broker
