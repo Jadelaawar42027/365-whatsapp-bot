@@ -61,3 +61,27 @@ export async function listAllMessages(conversationId) {
   }
   return all;
 }
+
+// One message by ID, including its body. Email bodies are only returned by this endpoint.
+export async function getMessageById(messageId) {
+  const data = await ghlGet(`/conversations/messages/${messageId}`);
+  return data.message || data;
+}
+
+// Every user on the location (the roster name -> GHL user ID lookup).
+export async function listLocationUsers() {
+  const data = await ghlGet("/users/search", { locationId: process.env.GHL_LOCATION_ID });
+  return data.users || [];
+}
+
+// Conversations assigned to one GHL user, newest activity first. Used to find emails a broker
+// sent from GHL's own inbox - those are the only emails that carry their signature.
+export async function listConversationsForUser(userId, { startAfterDate } = {}) {
+  const data = await ghlGet("/conversations/search", {
+    locationId: process.env.GHL_LOCATION_ID,
+    assignedTo: userId,
+    limit: 100,
+    startAfterDate,
+  });
+  return data.conversations || [];
+}

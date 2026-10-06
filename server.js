@@ -20,6 +20,7 @@ import { checkDbConnection } from "./db/pool.js";
 import { getStaleMissedFollowups, resolveFollowupsWithLiveActivity } from "./db/followupEvents.js";
 import { runBackfill, syncDay, getSetterActivity, parisDay, msUntilNextParisEndOfDay } from "./setterActivitySync.js";
 import { handleSmsButtonReply } from "./smsDrafts.js";
+import { refreshAllSignatures } from "./brokerSignatures.js";
 
 const app = express();
 // verify captures the exact raw request bytes onto req.rawBody, alongside
@@ -973,6 +974,26 @@ function scheduleDailySetterSync() {
     scheduleDailySetterSync();
   }, msUntilNextParisEndOfDay());
 }
+
+// ---------------------------------------------------------------------------
+// 7) Broker email signatures - pulled from real GHL emails, stored once. Brokers already
+//    checked (stored or marked no_signature) are skipped unless force is set.
+// ---------------------------------------------------------------------------
+app.post("/trigger/broker-signatures-refresh", async (req, res) => {
+  if (!requireTriggerAuth(req, res)) return;
+  const force = req.body?.force === true;
+  const only = typeof req.body?.broker === "string" ? req.body.broker : undefined;
+  res.status(202).json({ status: "accepted" });
+  (async () => {
+    const results = await refreshAllSignatures({ force, only });
+    const lines = results.map((r) => `${r.brokerName}: ${r.status}`);
+    const aj = getIdentityByName("Aj El Aawar");
+    if (aj) {
+      await sendWhatsAppMessage(aj.phone, `Broker signature refresh done:\n${lines.join("\n")}`);
+    }
+    console.log("Broker signature refresh complete:", JSON.stringify(results));
+  })().catch((err) => console.error("Broker signature refresh failed:", err.message));
+});
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
