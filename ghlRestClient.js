@@ -70,7 +70,10 @@ export async function getMessageById(messageId) {
 
 // Every user on the location (the roster name -> GHL user ID lookup).
 export async function listLocationUsers() {
-  const data = await ghlGet("/users/search", { locationId: process.env.GHL_LOCATION_ID });
+  const data = await ghlGet("/users/search", {
+    companyId: process.env.GHL_COMPANY_ID,
+    locationId: process.env.GHL_LOCATION_ID,
+  });
   return data.users || [];
 }
 
