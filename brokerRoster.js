@@ -52,7 +52,10 @@ export const BROKER_ROSTER = {
 
   // --- Setters: outbound qualification/booking, own separate knowledge base ---
   // GHL's own user record is "Karim Timani" (no "El") - the email is unambiguous either way.
-  '48697713899': { name: 'Karim El Timani', role: 'leadership', slack: 'U05HD0984TU', email: 'karim@365yachts.org' },
+  // Phone updated from 48697713899 to this number per request - the old number no longer
+  // resolves to this identity (keeping both would make every by-name lookup for "Karim El
+  // Timani" ambiguous and return null, breaking call-review routing and the team summary).
+  '34656774137': { name: 'Karim El Timani', role: 'leadership', slack: 'U05HD0984TU', email: 'karim@365yachts.org' },
 };
 
 /**
