@@ -349,6 +349,62 @@ export async function runInternalReportWithFlags(identity, instructions, reportL
     } catch (err) {
       console.warn(`${reportLabel} for ${identity.name}: flags block wasn't valid JSON, treating as empty. Raw: ${flagsRaw.slice(0, 200)}`);
     }
+  } else {
+    // Previously silent - an empty flags array looked identical to "the flags block never made
+    // it into the output at all" (truncation, or the model just skipping it), with zero signal
+    // either way. Logged here instead of guessing from a broker complaining leads went missing.
+    console.warn(`${reportLabel} for ${identity.name} did not include a flags block - treating as zero flags, but this could mean the block was dropped rather than genuinely empty.`);
+  }
+
+  return { text: finalText, flags };
+}
+
+/**
+ * Same as runInternalReportWithFlags, but ALSO extracts and logs the self-reported coverage
+ * block (see runInternalReportWithCoverage's doc comment for what that's for and how to read
+ * it) - used by reports that need both leadership flags AND a coverage signal, like the morning
+ * digest. The instructions passed in must tell the model to output BOTH the ===FLAGS===/
+ * ===END_FLAGS=== block and the ===COVERAGE===/===END_COVERAGE=== block.
+ */
+export async function runInternalReportWithFlagsAndCoverage(identity, instructions, reportLabel = "report") {
+  const response = await callForReport(identity, instructions);
+
+  const allText = response.content
+    .filter((block) => block.type === "text")
+    .map((block) => block.text)
+    .join("\n");
+
+  let finalText = extractBetweenMarkers(allText, REPORT_MARKER, END_MARKER);
+  if (finalText === null) {
+    console.warn(`${reportLabel} for ${identity.name} did not include the ${REPORT_MARKER} marker - falling back to last text block.`);
+    const textBlocks = response.content.filter((block) => block.type === "text");
+    finalText = (textBlocks[textBlocks.length - 1]?.text || "").trim();
+  }
+  finalText = applyTruncationFallback(finalText, response, identity, reportLabel);
+
+  let flags = [];
+  const flagsRaw = extractBetweenMarkers(allText, FLAGS_MARKER, END_FLAGS_MARKER);
+  if (flagsRaw) {
+    try {
+      const parsed = JSON.parse(flagsRaw);
+      if (Array.isArray(parsed)) flags = parsed;
+    } catch (err) {
+      console.warn(`${reportLabel} for ${identity.name}: flags block wasn't valid JSON, treating as empty. Raw: ${flagsRaw.slice(0, 200)}`);
+    }
+  } else {
+    console.warn(`${reportLabel} for ${identity.name} did not include a flags block - treating as zero flags, but this could mean the block was dropped rather than genuinely empty.`);
+  }
+
+  const coverageRaw = extractBetweenMarkers(allText, COVERAGE_MARKER, END_COVERAGE_MARKER);
+  if (coverageRaw) {
+    try {
+      const coverage = JSON.parse(coverageRaw);
+      console.log(`${reportLabel} for ${identity.name} - coverage (self-reported; compare against the GHL MCP server's fetched-count logs):`, JSON.stringify(coverage));
+    } catch (err) {
+      console.warn(`${reportLabel} for ${identity.name}: coverage block wasn't valid JSON, skipping. Raw: ${coverageRaw.slice(0, 200)}`);
+    }
+  } else {
+    console.warn(`${reportLabel} for ${identity.name} did not include a coverage block.`);
   }
 
   return { text: finalText, flags };

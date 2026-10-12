@@ -3,7 +3,7 @@
 // reportEngine.js) for the marker/truncation/priority-format logic common
 // to every scheduled report type.
 
-import { runInternalReportWithFlags } from "./reportEngine.js";
+import { runInternalReportWithFlagsAndCoverage } from "./reportEngine.js";
 import { getMainLeadsReference } from "./mainLeadsSheet.js";
 
 const MORNING_DIGEST_INSTRUCTIONS = `Generate this person's MORNING DIGEST for today.
@@ -203,7 +203,18 @@ Output the exact marker "===FLAGS===" on its own line right after "===END===", t
 if empty: []) of objects shaped like:
 {"type": "near_close" or "alert", "leadName": "...", "reason": "one short sentence"}
 Then output the exact marker "===END_FLAGS===" on its own line. Valid JSON only - no markdown code
-fences, no trailing commas, no comments. If there's nothing to flag, output an empty array: [].`;
+fences, no trailing commas, no comments. If there's nothing to flag, output an empty array: [].
+
+COVERAGE SELF-REPORT - a diagnostic, not shown to the broker. Right after "===END_FLAGS===", output
+the exact marker "===COVERAGE===", then a single JSON object:
+{"buyNowActiveTotal": N, "buyNowActiveChecked": M}
+where N is the total number of this broker's leads with priority "Buy Now" or "Active" from
+get_broker_leads_overview (before any exclusions), and M is how many of those you actually pulled
+get_contact_notes and get_contact_tasks for (or get_conversation_timeline, for the email blind-spot
+check) before writing about them or deciding to exclude them. M should equal N unless you genuinely
+ran out of room - if M is less than N, that's expected to happen sometimes and is exactly what this
+number is for, don't inflate it to match N. Then output the exact marker "===END_COVERAGE===" on its
+own line, with nothing after it. Both coverage markers are required every time.`;
 
 /**
  * Generates a single person's morning digest. Cached for ~10 minutes (see
@@ -218,5 +229,5 @@ export async function generateMorningDigest(identity) {
   const instructions = mainLeadsRef
     ? `${MORNING_DIGEST_INSTRUCTIONS}\n\n${mainLeadsRef}`
     : MORNING_DIGEST_INSTRUCTIONS;
-  return runInternalReportWithFlags(identity, instructions, "morning digest");
+  return runInternalReportWithFlagsAndCoverage(identity, instructions, "morning digest");
 }
