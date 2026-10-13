@@ -44,6 +44,8 @@ export const FLAGS_MARKER = "===FLAGS===";
 export const END_FLAGS_MARKER = "===END_FLAGS===";
 export const COVERAGE_MARKER = "===COVERAGE===";
 export const END_COVERAGE_MARKER = "===END_COVERAGE===";
+export const HOT_LEAD_REMOVALS_MARKER = "===HOT_LEAD_REMOVALS===";
+export const END_HOT_LEAD_REMOVALS_MARKER = "===END_HOT_LEAD_REMOVALS===";
 export const BUDGET_MARKER = "===BUDGET===";
 export const END_BUDGET_MARKER = "===END_BUDGET===";
 
@@ -407,7 +409,21 @@ export async function runInternalReportWithFlagsAndCoverage(identity, instructio
     console.warn(`${reportLabel} for ${identity.name} did not include a coverage block.`);
   }
 
-  return { text: finalText, flags };
+  // Optional - only present when the instructions ask for a sticky hot-leads list (currently
+  // just the morning digest). Not every caller of this function needs it, so a missing block
+  // here is normal and not warned about, unlike flags/coverage which every caller requires.
+  let hotLeadRemovals = [];
+  const removalsRaw = extractBetweenMarkers(allText, HOT_LEAD_REMOVALS_MARKER, END_HOT_LEAD_REMOVALS_MARKER);
+  if (removalsRaw) {
+    try {
+      const parsed = JSON.parse(removalsRaw);
+      if (Array.isArray(parsed)) hotLeadRemovals = parsed;
+    } catch (err) {
+      console.warn(`${reportLabel} for ${identity.name}: hot lead removals block wasn't valid JSON, ignoring. Raw: ${removalsRaw.slice(0, 200)}`);
+    }
+  }
+
+  return { text: finalText, flags, hotLeadRemovals };
 }
 
 /**

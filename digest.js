@@ -5,6 +5,8 @@
 
 import { runInternalReportWithFlagsAndCoverage } from "./reportEngine.js";
 import { getMainLeadsReference } from "./mainLeadsSheet.js";
+import { callGhlMcpTool } from "./ghlMcpClient.js";
+import { syncHotLeadsFromOverview, getActiveHotLeads, applyHotLeadRemovals } from "./digestHotLeads.js";
 
 const MORNING_DIGEST_INSTRUCTIONS = `Generate this person's MORNING DIGEST for today.
 
@@ -76,18 +78,26 @@ soon, has proof of funds, wants to schedule a viewing), call update_lead_status 
 immediately - don't wait to ask permission for this specific flag, and mention in the report that you
 flagged it.
 
-HOT LEADS - NO CAP, RE-EVALUATE FROM SCRATCH EVERY RUN: there is no fixed number of hot leads to report -
-some days it's 3, some days it's 9. Evaluate every lead independently against the hot-lead criteria;
-don't stop once you've found 3-4 and treat that as "enough." Don't anchor on or assume continuity with
-any previous digest - re-derive the hot leads list from scratch every run, from THIS run's current
-message and note data for each broker. A lead that was hot yesterday is only hot today if it still meets
-criteria today; a lead that just started showing hot signals - even one that's never been flagged before,
-and even if its tier is currently Active or Nurture - MUST be included. Don't limit hot-signal checking to
-leads already tagged Hot or Buy Now: get_broker_leads_overview's hot/priority fields reflect whatever was
-last set, not necessarily what's true right now, so an Active or Nurture lead can have turned hot since
-the last check. For every lead marked Hot in this digest, include a one-line reason citing the specific
-signal (e.g. "asked about financing terms," "requested a sea trial date," "note: broker says client ready
-to make an offer this week") - never just list the name.
+HOT LEADS - NO CAP, CHECK EVERY LEAD FRESH FOR *NEW* CANDIDATES: there is no fixed number of hot leads to
+report - some days it's 3, some days it's 9. Evaluate every lead independently against the hot-lead
+criteria; don't stop once you've found 3-4 and treat that as "enough." A lead that just started showing
+hot signals - even one that's never been flagged before, and even if its tier is currently Active or
+Nurture - MUST be included. Don't limit hot-signal checking to leads already tagged Hot or Buy Now:
+get_broker_leads_overview's hot/priority fields reflect whatever was last set, not necessarily what's true
+right now, so an Active or Nurture lead can have turned hot since the last check. For every lead marked
+Hot in this digest, include a one-line reason citing the specific signal (e.g. "asked about financing
+terms," "requested a sea trial date," "note: broker says client ready to make an offer this week") - never
+just list the name.
+
+STICKY HOT LEADS - DO NOT RE-DERIVE THESE, THEY'RE ALREADY DECIDED: a separate list below (if present)
+names leads already confirmed hot in a previous digest and tracked outside this conversation - these are
+NOT re-evaluated from scratch and MUST appear in today's Hot Leads section regardless of what GHL's hot
+checkbox currently says. For each one, still pull real current notes/tasks/timeline (get_contact_notes,
+get_contact_tasks, get_conversation_timeline) and write a current, specific one-line status - don't just
+repeat yesterday's reason verbatim if something's moved. This list is the fix for hot leads inconsistently
+vanishing day to day - inclusion is guaranteed, you're only deciding WHAT to say about each one, never
+WHETHER to mention it. The "check every lead fresh" instruction above is for finding NEW hot candidates not
+already on this list - it does not give you permission to drop one that is.
 
 If a MAIN LEADS SHEET reference block is included below, cross-check every Hot-lead candidate against
 it before including them - it's leadership's own hand-maintained list of leads they already consider
@@ -128,6 +138,15 @@ Buy Now, then Active, then Nurture:
   below for untagged leads that DO show any real prior engagement (a real touch count, or a
   lastTouchDate at all, regardless of how old) but have since gone quiet - those are the ones actually
   worth verifying before flagging as forgotten.
+
+  HOT LEAD REMOVAL - rare, deliberate, logged: a lead on the STICKY HOT LEADS list only comes off it two
+  ways - its GHL outcome becomes Sale Closed/Lost (handled automatically, not your job), or you explicitly
+  remove it here with a clear, current reason (notes show the deal is dead, they bought elsewhere, or
+  they've gone definitively cold with no realistic path back - the same high bar as a Lost/cold-lead call
+  elsewhere in this digest). Going quiet for a few days, or today's notes just not being exciting, is NOT
+  a reason to remove - when in doubt, leave it on the list and just report that it's gone quiet. Most days
+  this should be empty.
+
   MANDATORY: read their conversation timeline (get_conversation_timeline) AND their notes
   (get_contact_notes) to inform a good recommendation - a recent note can completely change the picture
   (e.g. a note logged yesterday saying a showing is booked means this lead does NOT belong in this
@@ -214,7 +233,14 @@ get_contact_notes and get_contact_tasks for (or get_conversation_timeline, for t
 check) before writing about them or deciding to exclude them. M should equal N unless you genuinely
 ran out of room - if M is less than N, that's expected to happen sometimes and is exactly what this
 number is for, don't inflate it to match N. Then output the exact marker "===END_COVERAGE===" on its
-own line, with nothing after it. Both coverage markers are required every time.`;
+own line, with nothing after it. Both coverage markers are required every time.
+
+STICKY HOT LEAD REMOVALS - right after "===END_COVERAGE===", output the exact marker
+"===HOT_LEAD_REMOVALS===", then a JSON array (even if empty: []) of any sticky hot leads you decided to
+remove this run, per the HOT LEAD REMOVAL rule above:
+{"contactId": "...", "reason": "one short sentence"}
+Then output the exact marker "===END_HOT_LEAD_REMOVALS===" on its own line, with nothing after it. Both
+markers are required every time, even when the array is empty - most days it will be.`;
 
 /**
  * Generates a single person's morning digest. Cached for ~10 minutes (see
@@ -224,10 +250,69 @@ own line, with nothing after it. Both coverage markers are required every time.`
  * @param {{name: string, role: string}} identity - a roster entry
  * @returns {Promise<{text: string, flags: Array}>}
  */
+/**
+ * Deterministic pre-step, no Claude involved: resolves the broker's GHL user ID, fetches their
+ * live lead overview (hot flag + outcome per lead, already free data this call would need
+ * anyway), syncs the sticky digest_hot_leads table against it, and returns the text block to
+ * inject into the instructions. Fails soft - a lookup problem here (e.g. a roster name that
+ * doesn't resolve in GHL, same class of issue as Alex Siegers/Siegars) only means this run skips
+ * sticky tracking, it never breaks the digest itself.
+ */
+async function buildStickyHotLeadsBlock(identity) {
+  try {
+    const brokerDirectory = await callGhlMcpTool(identity, "list_brokers", {});
+    const directoryEntry = brokerDirectory.find(
+      (b) => b.name.trim().toLowerCase() === identity.name.trim().toLowerCase()
+    );
+    if (!directoryEntry) {
+      console.warn(`Sticky hot leads: no GHL user match for ${identity.name} - skipping for this run.`);
+      return { stickyText: "", overview: null };
+    }
+
+    // get_broker_leads_overview loops a real GHL API call per assigned contact (see
+    // ghlMcpClient.js) - genuinely slow, hence the 180s timeout. We need this same data for the
+    // sticky sync below, so we fetch it ONCE here and hand it to the model as already-fetched
+    // data (see generateMorningDigest) instead of making it call this same slow tool again itself.
+    const overview = await callGhlMcpTool(identity, "get_broker_leads_overview", { brokerId: directoryEntry.id }, 180000);
+    await syncHotLeadsFromOverview(identity.phone, overview);
+    const active = await getActiveHotLeads(identity.phone);
+
+    const stickyText = active.length === 0
+      ? "\n\nSTICKY HOT LEADS (tracked, from previous digests): none yet for this broker."
+      : `\n\nSTICKY HOT LEADS (tracked, from previous digests) - these MUST appear in today's Hot Leads section:\n${active.map((l) => `- ${l.name || "(name unknown)"} (contact ID: ${l.contactId})`).join("\n")}`;
+    return { stickyText, overview };
+  } catch (err) {
+    console.warn(`Sticky hot leads: failed for ${identity.name}, skipping for this run:`, err.message);
+    return { stickyText: "", overview: null };
+  }
+}
+
 export async function generateMorningDigest(identity) {
-  const mainLeadsRef = await getMainLeadsReference();
-  const instructions = mainLeadsRef
-    ? `${MORNING_DIGEST_INSTRUCTIONS}\n\n${mainLeadsRef}`
-    : MORNING_DIGEST_INSTRUCTIONS;
-  return runInternalReportWithFlagsAndCoverage(identity, instructions, "morning digest");
+  const [mainLeadsRef, { stickyText, overview }] = await Promise.all([
+    getMainLeadsReference(),
+    buildStickyHotLeadsBlock(identity),
+  ]);
+  const overviewBlock = overview
+    ? `\n\nBROKER LEADS OVERVIEW - ALREADY FETCHED, DO NOT CALL get_broker_leads_overview AGAIN: the full, ` +
+      `current result of get_broker_leads_overview for this broker is given below as JSON - it is this run's ` +
+      `real, fresh data (fetched moments ago), not a cached or stale copy, so every rule above that references ` +
+      `get_broker_leads_overview's fields (priority, hot, outcome, lastOutboundMessageDate, etc.) applies to it ` +
+      `exactly as if you'd called the tool yourself. Calling get_broker_leads_overview again this run would just ` +
+      `re-fetch this same data a second time (it's a slow tool - one real GHL API call per lead) - use this ` +
+      `instead:\n${JSON.stringify(overview)}`
+    : "";
+  const instructions = (mainLeadsRef ? `${MORNING_DIGEST_INSTRUCTIONS}\n\n${mainLeadsRef}` : MORNING_DIGEST_INSTRUCTIONS) + overviewBlock + stickyText;
+
+  const result = await runInternalReportWithFlagsAndCoverage(identity, instructions, "morning digest");
+
+  if (result.hotLeadRemovals?.length) {
+    try {
+      const applied = await applyHotLeadRemovals(identity.phone, result.hotLeadRemovals);
+      if (applied.length) console.log(`Sticky hot leads: removed for ${identity.name}:`, JSON.stringify(applied));
+    } catch (err) {
+      console.warn(`Sticky hot leads: failed to apply removals for ${identity.name}:`, err.message);
+    }
+  }
+
+  return { text: result.text, flags: result.flags };
 }
