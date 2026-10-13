@@ -8,6 +8,7 @@ import {
   listConversationsForUser,
   listAllMessages,
   getMessageById,
+  sendEmailToContact,
 } from "./ghlRestClient.js";
 
 const BROKER_NAMES = [
@@ -146,4 +147,15 @@ export async function refreshAllSignatures({ force = false, only } = {}) {
     }
   }
   return results;
+}
+
+// Appends a broker's stored signature to an email body and sends it through GHL. Refuses to send
+// when the broker has no stored signature, so an unsigned email never goes out by accident.
+export async function sendBrokerEmail({ brokerUserId, contactId, subject, bodyHtml }) {
+  const stored = await getStoredSignature(brokerUserId);
+  if (!stored || !stored.signature_html) {
+    throw new Error("No signature stored for this broker - refusing to send an unsigned email.");
+  }
+  const html = `${bodyHtml}<br/>${stored.signature_html}`;
+  return sendEmailToContact(contactId, { subject, html });
 }

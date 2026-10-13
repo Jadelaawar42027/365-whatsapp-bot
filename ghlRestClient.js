@@ -98,3 +98,22 @@ export async function listConversationsForUser(userId, { startAfterDate } = {}) 
   });
   return data.conversations || [];
 }
+
+// Sends one email to a contact. GHL sends it from the contact's assigned user.
+export async function sendEmailToContact(contactId, { subject, html }) {
+  const url = new URL(GHL_BASE + "/conversations/messages");
+  const res = await limited(() =>
+    fetch(url, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${process.env.GHL_API_TOKEN}`,
+        Version: "2021-07-28",
+        Accept: "application/json",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ type: "Email", contactId, subject, html }),
+    })
+  );
+  if (!res.ok) throw new Error(`GHL send email failed: ${res.status} ${await res.text()}`);
+  return res.json();
+}
