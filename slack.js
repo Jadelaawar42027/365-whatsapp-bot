@@ -143,13 +143,17 @@ export async function handleSlackEvent(req, res) {
     return;
   }
 
+  // Hoisted so the catch below can log who this was for and reply with a fallback instead of
+  // going dark - same reasoning as the WhatsApp webhook handler in server.js.
+  let replyChannel;
+  let threadTs;
+  let identity;
+
   try {
     const event = body.event;
     if (!event) return;
 
     let text;
-    let replyChannel;
-    let threadTs; // undefined = reply as a new top-level message (DMs); set for mentions
 
     if (
       event.type === "message" &&
@@ -186,7 +190,7 @@ export async function handleSlackEvent(req, res) {
 
     console.log(`Incoming Slack ${event.type === "app_mention" ? "mention" : "DM"} from ${slackUserId}: ${text}`);
 
-    const identity = getIdentityForSlackUser(slackUserId);
+    identity = getIdentityForSlackUser(slackUserId);
     logExchange({
       phone: slackUserId,
       name: identity?.name,
@@ -207,6 +211,13 @@ export async function handleSlackEvent(req, res) {
       message: reply,
     });
   } catch (err) {
-    console.error("Error handling incoming Slack event:", err);
+    console.error(`Error handling incoming Slack event for ${identity?.name || "unregistered"}:`, err);
+    if (replyChannel) {
+      try {
+        await postSlackMessage(replyChannel, "Something went wrong on my end processing that — try again in a moment, or ping Aj if it keeps happening.", threadTs);
+      } catch (sendErr) {
+        console.error("Also failed to send the error fallback to Slack:", sendErr.message);
+      }
+    }
   }
 }

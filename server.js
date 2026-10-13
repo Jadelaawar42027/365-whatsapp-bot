@@ -60,8 +60,12 @@ app.post("/webhook", async (req, res) => {
   // Declared outside the try block so the catch handler below can always
   // clear it - a setInterval left running after an unhandled error would
   // otherwise ping sendTypingIndicator every 20s forever, unlike the
-  // one-shot setTimeout this replaced.
+  // one-shot setTimeout this replaced. from/identity are hoisted the same
+  // way, so a failure can still be logged and acknowledged with who it
+  // happened to and sent a fallback reply, instead of going dark.
   let typingInterval = null;
+  let from = null;
+  let identity = null;
 
   try {
     const entry = req.body.entry?.[0];
@@ -138,7 +142,7 @@ app.post("/webhook", async (req, res) => {
       return;
     }
 
-    const from = message.from; // sender's phone number
+    from = message.from; // sender's phone number
 
     // message.timestamp is WhatsApp's own record of when THEY received this
     // message (Unix seconds) - comparing it against when we're actually
@@ -186,7 +190,7 @@ app.post("/webhook", async (req, res) => {
       }
     }
 
-    const identity = getIdentityForPhone(from);
+    identity = getIdentityForPhone(from);
     logExchange({
       phone: from,
       name: identity?.name,
@@ -215,8 +219,16 @@ app.post("/webhook", async (req, res) => {
       message: reply,
     });
   } catch (err) {
-    console.error("Error handling incoming webhook:", err);
+    console.error(`Error handling incoming webhook from ${from} (${identity?.name || "unregistered"}):`, err);
     clearInterval(typingInterval);
+    // Every other failure path in this pipeline (empty/truncated/incomplete replies, see
+    // claude.js) sends the broker something rather than going dark - an uncaught exception here
+    // was the one path that previously left them with total silence and no idea anything broke.
+    try {
+      await sendWhatsAppMessage(from, "Something went wrong on my end processing that — try again in a moment, or ping Aj if it keeps happening.");
+    } catch (sendErr) {
+      console.error(`Also failed to send the error fallback to ${from}:`, sendErr.message);
+    }
   }
 });
 
