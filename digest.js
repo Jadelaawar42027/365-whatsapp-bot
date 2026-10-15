@@ -4,7 +4,7 @@
 // to every scheduled report type.
 
 import { runInternalReportWithFlagsAndCoverage } from "./reportEngine.js";
-import { getMainLeadsReference } from "./mainLeadsSheet.js";
+import { getMainLeadsReference, getBuyerLeadsReference } from "./mainLeadsSheet.js";
 import { callGhlMcpTool } from "./ghlMcpClient.js";
 import { syncHotLeadsFromOverview, getActiveHotLeads, applyHotLeadRemovals } from "./digestHotLeads.js";
 
@@ -108,6 +108,16 @@ tag - before you call it Hot; when the evidence is thin and the lead isn't on th
 rather than including it on a guess. This list doesn't replace checking real GHL data - it's a
 cross-check on top of it, not a substitute for reading the actual conversation/notes.
 
+If a BUYER LEADS SHEET reference block is included below, treat it the same way: a candidate list to
+make sure you don't miss a lead someone on the team is actively working, NEVER a verdict on its own. It
+carries a real narrative "Update" per lead (a setter or broker's own note), which can be MORE current
+than GHL for that specific lead, or can be STALE - a lead listed there can have already cooled (e.g. the
+client said they're waiting a few months) since that update was written. For every lead on this sheet,
+pull their real current notes/conversation before deciding - the sheet's own "Update" text is a strong
+hint of what to look for, not a substitute for checking. A lead that just went hot from a fresh reply
+that ISN'T on this sheet yet is still caught by the normal HOT LEADS check above - this sheet only adds
+candidates, it never limits which leads you evaluate.
+
 Structure the report in this order, ALWAYS with Hot leads (regardless of tier) surfaced first, then
 Buy Now, then Active, then Nurture:
 
@@ -139,13 +149,22 @@ Buy Now, then Active, then Nurture:
   lastTouchDate at all, regardless of how old) but have since gone quiet - those are the ones actually
   worth verifying before flagging as forgotten.
 
-  HOT LEAD REMOVAL - rare, deliberate, logged: a lead on the STICKY HOT LEADS list only comes off it two
-  ways - its GHL outcome becomes Sale Closed/Lost (handled automatically, not your job), or you explicitly
-  remove it here with a clear, current reason (notes show the deal is dead, they bought elsewhere, or
-  they've gone definitively cold with no realistic path back - the same high bar as a Lost/cold-lead call
-  elsewhere in this digest). Going quiet for a few days, or today's notes just not being exciting, is NOT
-  a reason to remove - when in doubt, leave it on the list and just report that it's gone quiet. Most days
-  this should be empty.
+  HOT LEAD REMOVAL/DOWNGRADE - act on clear evidence, don't just flag it and wait: a lead on the STICKY
+  HOT LEADS list comes off it, or gets its priority tier corrected, in any of these cases - its GHL
+  outcome becomes Sale Closed/Lost (handled automatically, not your job); notes show the deal is dead,
+  they bought elsewhere, or they've gone definitively cold with no realistic path back (the same high bar
+  as a Lost/cold-lead call elsewhere in this digest); OR a specific, current, logged note gives a concrete
+  reason the urgency itself no longer holds - e.g. they're now waiting on an external event (financing
+  falling through, a payout, selling another boat first) with no firm timeline, even though they're not
+  dead as a prospect. In any of these cases, call update_lead_status yourself to correct the priority
+  tier and/or hot flag to match reality, remove them from the sticky list if they no longer belong there,
+  and report what you changed and why in ONE short line (e.g. "Downgraded Jeff Anderson to On Hold -
+  waiting on a lawsuit payout with no firm timeline."). This instruction IS the authorization for that
+  update_lead_status call - you do not need to ask the broker first here, unlike a normal live-chat
+  priority change. The bar for what counts as real evidence doesn't change: going quiet for a few days,
+  or today's notes just not being exciting, is NOT enough on its own - you need an actual logged reason,
+  not just silence. When there's no such reason, leave it exactly as is and just report current status.
+  Most days there should be few or none of these.
 
   MANDATORY: read their conversation timeline (get_conversation_timeline) AND their notes
   (get_contact_notes) to inform a good recommendation - a recent note can completely change the picture
@@ -288,8 +307,9 @@ async function buildStickyHotLeadsBlock(identity) {
 }
 
 export async function generateMorningDigest(identity) {
-  const [mainLeadsRef, { stickyText, overview }] = await Promise.all([
+  const [mainLeadsRef, buyerLeadsRef, { stickyText, overview }] = await Promise.all([
     getMainLeadsReference(),
+    getBuyerLeadsReference(),
     buildStickyHotLeadsBlock(identity),
   ]);
   const overviewBlock = overview
@@ -301,7 +321,8 @@ export async function generateMorningDigest(identity) {
       `re-fetch this same data a second time (it's a slow tool - one real GHL API call per lead) - use this ` +
       `instead:\n${JSON.stringify(overview)}`
     : "";
-  const instructions = (mainLeadsRef ? `${MORNING_DIGEST_INSTRUCTIONS}\n\n${mainLeadsRef}` : MORNING_DIGEST_INSTRUCTIONS) + overviewBlock + stickyText;
+  const instructions = (mainLeadsRef ? `${MORNING_DIGEST_INSTRUCTIONS}\n\n${mainLeadsRef}` : MORNING_DIGEST_INSTRUCTIONS) +
+    (buyerLeadsRef ? `\n\n${buyerLeadsRef}` : "") + overviewBlock + stickyText;
 
   const result = await runInternalReportWithFlagsAndCoverage(identity, instructions, "morning digest");
 
