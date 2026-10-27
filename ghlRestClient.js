@@ -99,6 +99,16 @@ export async function listConversationsForUser(userId, { startAfterDate } = {}) 
   return data.conversations || [];
 }
 
+// Every opportunity (deal) on one contact, across all pipelines. Raw GHL opportunity objects.
+export async function getOpportunitiesForContact(contactId) {
+  const data = await ghlGet("/opportunities/search", {
+    location_id: process.env.GHL_LOCATION_ID,
+    contact_id: contactId,
+    limit: 20,
+  });
+  return data.opportunities || [];
+}
+
 // Sends one email to a contact. GHL sends it from the contact's assigned user.
 export async function sendEmailToContact(contactId, { subject, html }) {
   const url = new URL(GHL_BASE + "/conversations/messages");

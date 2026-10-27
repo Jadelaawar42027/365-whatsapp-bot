@@ -7,6 +7,8 @@ import { runInternalReportWithFlagsAndCoverage } from "./reportEngine.js";
 import { getMainLeadsReference, getBuyerLeadsReference } from "./mainLeadsSheet.js";
 import { callGhlMcpTool } from "./ghlMcpClient.js";
 import { syncHotLeadsFromOverview, getActiveHotLeads, applyHotLeadRemovals } from "./digestHotLeads.js";
+import { getOpportunitiesForContact } from "./ghlRestClient.js";
+import { BUYER_PIPELINE_ID } from "./budgetBackfill.js";
 
 const MORNING_DIGEST_INSTRUCTIONS = `Generate this person's MORNING DIGEST for today.
 
@@ -118,6 +120,14 @@ hint of what to look for, not a substitute for checking. A lead that just went h
 that ISN'T on this sheet yet is still caught by the normal HOT LEADS check above - this sheet only adds
 candidates, it never limits which leads you evaluate.
 
+BUDGET IN EVERY LEAD LINE: each lead in the BROKER LEADS OVERVIEW below has a "budget" field - the
+lead's Buyer Pipeline deal value, already formatted (e.g. "$350K", "$1.2M"), or null if none is set.
+Whenever you name a lead anywhere in this digest, put their budget in parentheses right after their
+name, before everything else on the line - the rest of the line stays exactly as the format rules
+say. Example: "Barry Lee ($350K) 🔥 🔴 Buy Now: asked to schedule a viewing this week and hasn't heard
+back — call him today to lock in a time." If budget is null, just leave the parentheses out - never
+write "unknown" or guess a number, and never use a budget from anywhere other than this field.
+
 Structure the report in this order, ALWAYS with Hot leads (regardless of tier) surfaced first, then
 Buy Now, then Active, then Nurture:
 
@@ -173,10 +183,11 @@ Buy Now, then Active, then Nurture:
   SENTENCE per lead, nothing more. The broker already lived the history - don't replay it back to them.
   NO dates, NO "here's what happened," NO narrative walkthrough of the relationship. Just the name,
   tier, and the action.
-  Exact format, one line, no exceptions: "[Lead Name] [priority emoji + label, or \"No priority set\"]:
-  [ONE specific action]." That's the entire entry - nothing before it, nothing after it.
-  Good example: "Charles Woods No priority set: call him, ask if he looked at the Naval 78 v2 — looks
-  like Active, want me to set it?"
+  Exact format, one line, no exceptions: "[Lead Name] [(budget), if set] [priority emoji + label, or
+  \"No priority set\"]: [ONE specific action]." That's the entire entry - nothing before it, nothing
+  after it.
+  Good example: "Charles Woods ($800K) No priority set: call him, ask if he looked at the Naval 78 v2 —
+  looks like Active, want me to set it?"
   Bad example (too long, don't do this): "Charles Woods — No priority set: Solid lead who texted you
   cold on July 26... [multiple sentences of history]... Recommended: call him today..."
   If more than 5 leads qualify for this section, list only the 5 most worth touching today and close
@@ -306,12 +317,51 @@ async function buildStickyHotLeadsBlock(identity) {
   }
 }
 
+// "$350K", "$1.2M" - or null for no value. Anything under $1,000 is treated as unset, same
+// floor as budgetParser.js (nobody buys a yacht for less, so it's a bad value, not a budget).
+export function formatBudget(value) {
+  const n = Number(value);
+  if (!n || n < 1000) return null;
+  if (n >= 999500) return `$${+(n / 1e6).toFixed(2)}M`;
+  return `$${Math.round(n / 1e3)}K`;
+}
+
+// Leads the digest never names individually - no point spending a GHL call on their budget.
+const SKIP_PRIORITY_RE = /low priority|on hold|closed/i;
+const SKIP_OUTCOMES = new Set(["Sale Closed", "Lost"]);
+
+/**
+ * Adds a "budget" field to each overview lead: the value of their Buyer Pipeline deal. Leads
+ * with no Buyer Pipeline deal, a zero value, or a lookup error get null - a failed lookup only
+ * means that one line shows no budget, it never breaks the digest.
+ */
+async function addBudgetsToOverview(overview) {
+  return Promise.all(
+    overview.map(async (lead) => {
+      if (SKIP_OUTCOMES.has(lead.outcome) || SKIP_PRIORITY_RE.test(lead.priority || "")) {
+        return { ...lead, budget: null };
+      }
+      try {
+        const opportunities = await getOpportunitiesForContact(lead.id);
+        const values = opportunities
+          .filter((o) => o.pipelineId === BUYER_PIPELINE_ID)
+          .map((o) => Number(o.monetaryValue) || 0);
+        return { ...lead, budget: formatBudget(Math.max(0, ...values)) };
+      } catch (err) {
+        console.warn(`Digest budgets: lookup failed for contact ${lead.id}:`, err.message);
+        return { ...lead, budget: null };
+      }
+    })
+  );
+}
+
 export async function generateMorningDigest(identity) {
-  const [mainLeadsRef, buyerLeadsRef, { stickyText, overview }] = await Promise.all([
+  const [mainLeadsRef, buyerLeadsRef, { stickyText, overview: rawOverview }] = await Promise.all([
     getMainLeadsReference(),
     getBuyerLeadsReference(),
     buildStickyHotLeadsBlock(identity),
   ]);
+  const overview = Array.isArray(rawOverview) ? await addBudgetsToOverview(rawOverview) : rawOverview;
   const overviewBlock = overview
     ? `\n\nBROKER LEADS OVERVIEW - ALREADY FETCHED, DO NOT CALL get_broker_leads_overview AGAIN: the full, ` +
       `current result of get_broker_leads_overview for this broker is given below as JSON - it is this run's ` +
