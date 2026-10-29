@@ -59,6 +59,22 @@ export function moveRollingMarker(messages, oldIdx, mark = withCacheMarker, unma
 // Memory layer (Postgres) is optional - degrades to "no memory tools offered"
 // rather than the bot erroring on every message if it isn't configured.
 const MEMORY_ENABLED = Boolean(process.env.AIBOT_DATABASE_URL);
+
+// FLIBS 2026 show-up marking. Only added to the prompt through Sunday Nov 2 (Eastern); the MCP
+// server's mark_flibs_showed tool also refuses after that, so it switches off on its own.
+const FLIBS_MARKING_ENDS_AT = Date.parse("2026-11-03T00:00:00-05:00");
+const FLIBS_SHOWED_RULE = `
+
+FLIBS 2026 SHOW-UPS (active through Sunday Nov 2): when a broker sends you a lead's name, or a list of
+names, with no other question or request, they are telling you that lead showed up at FLIBS. This works
+for ANY lead in the CRM, not just the broker's own. For each name, call mark_flibs_showed with the name
+exactly as written - do NOT call search_contacts first (it only sees the broker's own leads; this tool
+searches everyone). Don't ask for confirmation first - the broker sending the name IS the request. If the
+tool returns multiple candidates or no match, don't guess: list the candidates (name + last 4 phone digits)
+and ask which one, then call mark_flibs_showed again with that contactId. This only sets the FLIBS field -
+never reassign the lead or change anything else on it as part of this. Reply briefly with each contact's
+full name (e.g. "Marked as Showed at FLIBS: John Smith, Maria Lopez"). If the broker's message is clearly
+asking something else about a lead (e.g. "what's the status on John Smith?"), answer that instead.`;
 // Bounds the local tool loop below - a normal turn uses 0-2 round trips.
 // Leadership gets a much higher cap: a large batch request (e.g. "go
 // through all 23 reactivation leads") can legitimately pause_turn several
@@ -408,7 +424,7 @@ export async function askClaude(conversationKey, userMessage, identity, channel)
     minute: "2-digit",
     timeZoneName: "short",
   })}. Use this as ground truth for "today", "overdue", "how long ago", etc. - never guess or infer the
-current date from anything else.`;
+current date from anything else.${now.getTime() < FLIBS_MARKING_ENDS_AT ? FLIBS_SHOWED_RULE : ""}`;
 
   let userContext;
   let mcpServers;
